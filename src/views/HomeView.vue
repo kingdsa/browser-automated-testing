@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppNav from '@/components/requirements/AppNav.vue'
 import Composer from '@/components/chat/Composer.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import SettingsPanel from '@/components/chat/SettingsPanel.vue'
@@ -75,9 +76,12 @@ async function saveReport() {
 
     <main class="main">
       <header class="topbar">
-        <div>
-          <h1>Browser Automated Testing</h1>
-          <p>AI 模拟测试人员 · 控制浏览器 · 流式反馈</p>
+        <div class="topbar__left">
+          <AppNav />
+          <div>
+            <h1>Browser Automated Testing</h1>
+            <p>AI 模拟测试人员 · 控制浏览器 · 流式反馈</p>
+          </div>
         </div>
         <div class="topbar__actions">
           <Transition name="tip">
@@ -148,6 +152,13 @@ async function saveReport() {
   padding: 18px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
+}
+
+.topbar__left {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
 }
 
 .topbar h1 {
