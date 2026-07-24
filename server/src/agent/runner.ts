@@ -1,0 +1,251 @@
+import OpenAI from 'openai'
+import { v4 as uuidv4 } from 'uuid'
+import { config } from '../config.js'
+import { BrowserSession } from '../browser/session.js'
+import { browserToolDefinitions, executeBrowserTool } from '../browser/tools.js'
+import { buildSystemPrompt, loadSkills } from '../skills/loader.js'
+import type {
+  ChatMessage,
+  LlmSettings,
+  SessionConfig,
+  StreamEvent,
+  ToolCall,
+} from '../types/index.js'
+
+export interface RunAgentInput {
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>
+  llm: LlmSettings
+  session?: SessionConfig
+  onEvent: (event: StreamEvent) => void
+  signal?: AbortSignal
+}
+
+function normalizeBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/, '')
+  if (!trimmed) return trimmed
+  // OpenAI SDK appends /chat/completions; many gateways expect /v1
+  if (trimmed.endsWith('/v1')) return trimmed
+  if (/\/v\d+$/.test(trimmed)) return trimmed
+  return `${trimmed}/v1`
+}
+
+function toOpenAiMessages(messages: ChatMessage[]): OpenAI.Chat.ChatCompletionMessageParam[] {
+  return messages.map((msg) => {
+    if (msg.role === 'tool') {
+      return {
+        role: 'tool',
+        tool_call_id: msg.tool_call_id || '',
+        content: msg.content,
+      }
+    }
+    if (msg.role === 'assistant' && msg.tool_calls?.length) {
+      return {
+        role: 'assistant',
+        content: msg.content || null,
+        tool_calls: msg.tool_calls.map((call) => ({
+          id: call.id,
+          type: 'function' as const,
+          function: {
+            name: call.function.name,
+            arguments: call.function.arguments,
+          },
+        })),
+      }
+    }
+    return {
+      role: msg.role,
+      content: msg.content,
+    } as OpenAI.Chat.ChatCompletionMessageParam
+  })
+}
+
+export async function runAgent(input: RunAgentInput): Promise<void> {
+  const { messages, llm, session: sessionConfig, onEvent, signal } = input
+  const sessionId = uuidv4()
+  const maxSteps = sessionConfig?.maxSteps ?? config.defaultMaxSteps
+  const targetUrl = sessionConfig?.targetUrl
+
+  onEvent({ type: 'session', data: { sessionId, targetUrl: targetUrl || null } })
+
+  if (!llm.apiKey?.trim()) {
+    onEvent({ type: 'error', data: { message: '请先配置 API Key' } })
+    onEvent({ type: 'done', data: { sessionId } })
+    return
+  }
+  if (!llm.baseUrl?.trim()) {
+    onEvent({ type: 'error', data: { message: '请先配置 Base URL' } })
+    onEvent({ type: 'done', data: { sessionId } })
+    return
+  }
+  if (!llm.model?.trim()) {
+    onEvent({ type: 'error', data: { message: '请先配置模型名称' } })
+    onEvent({ type: 'done', data: { sessionId } })
+    return
+  }
+
+  const skills = await loadSkills()
+  const systemPrompt = buildSystemPrompt(skills, targetUrl)
+
+  const history: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    ...messages.map((m) => ({ role: m.role, content: m.content }) as ChatMessage),
+  ]
+
+  // Some gateways WAF-block OpenAI SDK fingerprint headers (User-Agent / x-stainless-*).
+  // Override them so OpenAI-compatible relays accept the request.
+  const client = new OpenAI({
+    apiKey: llm.apiKey,
+    baseURL: normalizeBaseUrl(llm.baseUrl),
+    defaultHeaders: {
+      'User-Agent': 'browser-automated-testing/0.1',
+      'X-Stainless-Lang': null,
+      'X-Stainless-Package-Version': null,
+      'X-Stainless-OS': null,
+      'X-Stainless-Arch': null,
+      'X-Stainless-Runtime': null,
+      'X-Stainless-Runtime-Version': null,
+      'X-Stainless-Retry-Count': null,
+    },
+  })
+
+  const browser = new BrowserSession({ headless: sessionConfig?.headless ?? false })
+
+  try {
+    if (targetUrl) {
+      onEvent({ type: 'status', data: { message: `正在打开目标页: ${targetUrl}` } })
+      const opened = await browser.openUrl(targetUrl)
+      onEvent({
+        type: 'tool_result',
+        data: {
+          name: 'open_url',
+          result: opened,
+        },
+      })
+      history.push({
+        role: 'system',
+        content: `系统已预打开目标 URL。结果: ${opened.summary}`,
+      })
+    }
+
+    for (let step = 1; step <= maxSteps; step++) {
+      if (signal?.aborted) {
+        onEvent({ type: 'status', data: { message: '用户已停止本次测试' } })
+        break
+      }
+
+      onEvent({ type: 'status', data: { message: `Agent 思考中（第 ${step}/${maxSteps} 步）...` } })
+
+      const stream = await client.chat.completions.create({
+        model: llm.model,
+        messages: toOpenAiMessages(history),
+        tools: browserToolDefinitions,
+        tool_choice: 'auto',
+        stream: true,
+        temperature: 0.2,
+      })
+
+      let assistantText = ''
+      const toolCallMap = new Map<number, ToolCall>()
+
+      for await (const chunk of stream) {
+        if (signal?.aborted) break
+        const choice = chunk.choices?.[0]
+        if (!choice) continue
+
+        const delta = choice.delta
+        if (delta?.content) {
+          assistantText += delta.content
+          onEvent({ type: 'delta', data: { content: delta.content } })
+        }
+
+        if (delta?.tool_calls) {
+          for (const part of delta.tool_calls) {
+            const index = part.index ?? 0
+            const existing = toolCallMap.get(index) || {
+              id: part.id || `call_${index}_${Date.now()}`,
+              type: 'function' as const,
+              function: { name: '', arguments: '' },
+            }
+            if (part.id) existing.id = part.id
+            if (part.function?.name) existing.function.name += part.function.name
+            if (part.function?.arguments) existing.function.arguments += part.function.arguments
+            toolCallMap.set(index, existing)
+          }
+        }
+      }
+
+      const toolCalls = [...toolCallMap.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, call]) => call)
+        .filter((call) => call.function.name)
+
+      history.push({
+        role: 'assistant',
+        content: assistantText,
+        tool_calls: toolCalls.length ? toolCalls : undefined,
+      })
+
+      if (!toolCalls.length) {
+        onEvent({ type: 'status', data: { message: '测试完成，已生成结论' } })
+        break
+      }
+
+      for (const call of toolCalls) {
+        if (signal?.aborted) break
+
+        onEvent({
+          type: 'tool_start',
+          data: {
+            id: call.id,
+            name: call.function.name,
+            arguments: call.function.arguments,
+          },
+        })
+
+        const result = await executeBrowserTool(browser, call.function.name, call.function.arguments)
+
+        onEvent({
+          type: 'tool_result',
+          data: {
+            id: call.id,
+            name: call.function.name,
+            result: {
+              ok: result.ok,
+              summary: result.summary,
+              data: result.data,
+              screenshotPath:
+                result.data && typeof result.data === 'object' && result.data !== null && 'path' in result.data
+                  ? (result.data as { path?: string }).path
+                  : undefined,
+              screenshotBase64: result.screenshotBase64,
+            },
+          },
+        })
+
+        history.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: JSON.stringify({
+            ok: result.ok,
+            summary: result.summary,
+            data: result.data,
+          }),
+        })
+      }
+    }
+  } catch (error) {
+    let message = error instanceof Error ? error.message : String(error)
+    const anyErr = error as { status?: number; error?: { message?: string }; message?: string }
+    if (anyErr?.status) {
+      message = `LLM 请求失败 (HTTP ${anyErr.status}): ${anyErr?.error?.message || anyErr.message || message}`
+    }
+    if (message.includes('403')) {
+      message +=
+        '。请检查中转站是否拦截当前 IP/Referer/User-Agent，以及 Base URL、API Key、模型名是否正确。若中转站对 OpenAI SDK 指纹敏感，服务端已自动改写请求头；仍失败时请换模型或联系中转站。'
+    }
+    onEvent({ type: 'error', data: { message } })
+  } finally {
+    await browser.close()
+    onEvent({ type: 'done', data: { sessionId } })
+  }
+}

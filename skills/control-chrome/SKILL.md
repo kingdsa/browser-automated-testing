@@ -1,119 +1,67 @@
 ---
 name: control-chrome
-description: "Control the user's Chrome browser for tasks that depend on existing Chrome state: tabs, logged-in sessions, or extensions. Prefer purpose-built connectors, APIs, or CLIs when available."
+description: "用浏览器自动化能力模拟测试人员：打开页面、检查布局/交互/接口/控制台，并输出可执行缺陷报告。"
 ---
 
-# Browser
-## Stop: choose the right surface before any browser action
-Explicit browser intent wins: if the user names the in-app browser or Chrome, or asks to open, show, or navigate to a page; inspect its visual or interactive state; or interact with its UI, continue with Browser and do not substitute a connector.
+# Browser Automated Testing Skill
 
-Otherwise, treat a URL or open browser tab as context, not browser intent. Earlier Browser use does not make later semantic work browser-first. Before each semantic operation on a linked resource, you MUST query available and deferred tools for an applicable connector, API, or CLI. Reading this skill or scanning visible tools does not count. Do not initialize Browser for that operation until the query is complete. Use the non-browser tool when available. If it handles the current operation, continue the larger workflow without Browser for that operation. Use Browser when no such tool exists, the tool cannot access the resource or lacks a required capability, or UI work remains; use available browser context before asking the user to repeat it.
+你在本项目中通过服务端 Playwright 工具控制真实浏览器（默认有头模式，便于观察）。这是独立产品化实现，行为对齐 Codex Desktop 的 control-chrome 测试思路，但不依赖 Codex 私有 runtime。
 
-Use this skill for browser automation tasks such as inspecting pages, navigating, testing local apps, clicking, typing, taking screenshots, and reading visible page state.
+## 何时使用
+当用户给出 URL 或要求检查某个页面时，立即开始浏览器测试，不要只给建议。
 
-If this plugin is listed as available in the session, treat that as mandatory reading before browser work. Open and follow this skill before saying that Browser is unavailable and before falling back to standalone Playwright or Computer Use.
+## 测试范围
+1. **布局 / UI**
+   - 首屏是否错位、遮挡、横向溢出
+   - 关键文案、标题、按钮是否可见
+   - 不同滚动位置是否有明显断层
+2. **交互**
+   - 核心按钮/链接是否可点击
+   - 表单是否可输入、基础校验是否存在
+   - 导航路径是否可达
+3. **接口 / 网络**
+   - 失败请求、4xx/5xx、明显超时
+   - 关键 XHR/Fetch 是否成功
+4. **控制台**
+   - error / pageerror / 高频 warning
+5. **可用性**
+   - 空状态、加载态、错误态是否友好
 
-Do not skip this skill just because Computer Use MCP tool calls are directly visible or appear easier to invoke. The presence of Computer Use tools is not evidence that Computer Use is the preferred browser surface.
+## 推荐操作顺序
+1. `open_url` / 系统预打开 URL
+2. `get_page_snapshot` 了解结构与可交互元素
+3. `get_console_logs` + `get_network_logs`（可 onlyFailed）
+4. 对核心路径 `click` / `type_text` / `scroll_page` / `wait_for`
+5. 关键节点 `take_screenshot`
+6. 汇总报告，停止无意义操作
 
-## Setup Documentation
-Use `await agent.documentation.get("<name>")` when one of these setup topics applies:
-- `bootstrap-troubleshooting`: read when browser setup succeeds but discovery or selection fails
-- `chrome-troubleshooting`: read when Chrome extension setup, installation, or communication fails
+## 输出格式
+最终回复使用中文，建议结构：
 
-## Bootstrap
-These setup details are internal. User-facing progress updates should be less technical in nature. Never mention `Node REPL`, `node_repl`, `REPL`, JavaScript sessions, module exports, reading documentation, or loading instructions unless a user is asking for that exact information. If setup or recovery is needed, describe it naturally as connecting to the browser or retrying the browser connection.
+### 测试概览
+- 目标 URL
+- 覆盖路径
+- 总体结论（通过 / 有风险 / 阻断）
 
-The `browser-client` module is the core entry point for browser use, and is available under `scripts/browser-client.mjs` in this plugin's root directory. ALWAYS import it using an absolute path. IMPORTANT: If this path cannot be found, stop and report that this plugin is missing `scripts/browser-client.mjs`. NEVER use the built in `browser-client` library.
+### 问题列表
+对每个问题给出：
+- 严重级别：critical / major / minor
+- 现象
+- 证据（接口状态、控制台、截图、选择器）
+- 复现步骤
+- 修复建议
 
-Run browser setup code through the Node REPL `js` tool. In this environment the callable tool id typically appears as `mcp__node_repl__js`. If it is not already available, use tool discovery for `node_repl js` without setting a result limit. You need the `js` execution tool: `js_reset` only clears state, and `js_add_node_module_dir` only changes package resolution. Do not call either helper while trying to expose `js`. If `js` is still not available, search again for `node_repl js` with `limit: 10`.
+### 未覆盖项
+明确说明本次没测到的地方。
 
-Initialize the runtime once per fresh Node session. If `agent.browsers` already exists, reuse it; do not import or initialize another browser runtime.
+## 安全边界
+- 默认不做支付、删除、提交订单等破坏性写操作
+- 用户明确要求时再谨慎执行，并先说明风险
+- 不要泄露 API Key
+- 选择器优先使用 snapshot 返回的 selectorHint
 
-```js
-if (globalThis.agent?.browsers == null) {
-  const { setupBrowserRuntime } = await import("<plugin root>/scripts/browser-client.mjs");
-  await setupBrowserRuntime({ globals: globalThis });
-}
-```
-
-Once a browser connection is established, reuse its existing browser binding across later turns and do not reread this skill. Once you have read a browser's complete documentation, do not read it again unless you select a different browser.
-
-A tab binding is separate from its browser binding. If a later turn reports that a tab is missing, stale, closed, or not part of the current browser session, discard that tab binding and obtain or create a fresh tab from the existing browser binding. An empty `browser.tabs.list()` or `browser.user.openTabs()` result is normal after tab cleanup and does not invalidate the browser binding. Never call `agent.browsers.get*` to recover a tab; only an explicit browser-disconnected error invalidates the binding.
-
-## Browser selection
-The scenarios below are for the initial browser selection only. Before calling any `agent.browsers.get*` method, reuse an existing `globalThis.browser`, `globalThis.iab`, or `globalThis.chrome` binding that already serves the task. A new user turn does not invalidate a browser binding or require another selection or documentation call.
-
-Select the initial browser with exactly one of these scenarios, in the order
-shown. An explicit request for the in-app browser or Chrome always wins over URL
-selection. Never call `getForUrl()` when the user names a browser.
-
-App-provided in-app-browser context is ambient UI state, not a user instruction to select or switch browsers. Only the text of the user's request can explicitly choose a browser.
-
-Do not inspect browser cookies, local storage, profiles, passwords, or session stores. Browser discovery must remain read-only.
-
-When authentication blocks requested browser navigation, do not replace it with web search, a search engine, another site, or another source merely to bypass sign-in.
-
-### The user explicitly requests a browser
-A plugin mention in the user's request explicitly names its browser.
-`[@Browser](plugin://browser@openai-bundled)` names the in-app browser.
-`[@Chrome](plugin://chrome@openai-bundled)`,
-`[@chrome-internal](plugin://chrome-internal@openai-bundled)`, and
-`[@chrome-dev](plugin://chrome-dev@openai-bundled)` name Chrome. Follow the
-corresponding explicit-browser scenario below.
-
-The in-app browser is available only when the Browser skill is listed for the session. If the user explicitly requests the in-app browser and that skill is available, use a distinct persistent binding and immediately read its complete documentation:
-
-```js
-if (globalThis.iab == null) {
-  globalThis.iab = await agent.browsers.get("iab");
-  nodeRepl.write(await iab.documentation());
-}
-```
-
-If the user explicitly requests the in-app browser but the Browser skill is not available, report that the in-app browser is unavailable instead of substituting another browser.
-
-Chrome is available only when the Chrome skill is listed for the session. If the user explicitly requests Chrome and that skill is available, use a separate persistent binding and immediately read its complete documentation:
-
-```js
-if (globalThis.chrome == null) {
-  globalThis.chrome = await agent.browsers.get("extension");
-  nodeRepl.write(await chrome.documentation());
-}
-```
-
-If the user explicitly requests Chrome but the Chrome skill is not available, report that Chrome is unavailable instead of substituting another browser.
-
-An explicit browser choice remains in force for the task. If authentication blocks the task in an explicitly selected browser, your next response must explicitly ask the user to sign in in that browser and tell you when it is ready, unless that browser's documentation provides a supported authentication flow to try first. Merely reporting that sign-in is required is not sufficient. Do not switch to another browser unless the user asks or approves the switch.
-
-### The task requires browser interaction, the user does not specify a browser, and the task has a target URL
-When the user supplies a URL or the intended URL can be reasonably inferred from the request, replace the example below with that URL and let browser-client choose the browser best suited to it:
-
-```js
-if (globalThis.browser == null) {
-  globalThis.browser = await agent.browsers.getForUrl("https://example.com/");
-  nodeRepl.write(await browser.documentation());
-}
-```
-
-### The user specifies neither a browser nor a target URL
-Use the runtime default, which prefers the in-app browser when it is available and otherwise uses Chrome. Do not list browsers first:
-
-```js
-if (globalThis.browser == null) {
-  globalThis.browser = await agent.browsers.getDefault();
-  nodeRepl.write(await browser.documentation());
-}
-```
-
-## After setup
-If setup succeeds but browser discovery or selection fails, read `await agent.documentation.get("bootstrap-troubleshooting")` before resetting the JavaScript session or trying another browser-control mechanism.
-
-If the failure is specific to Chrome extension setup, installation, or communication, read `await agent.documentation.get("chrome-troubleshooting")` before retrying or taking another recovery action.
-
-When the user did not explicitly choose a browser, a browser selected by the runtime is not a user constraint. Do not switch browsers based only on an assumption about authentication. If navigation shows that the selected browser lacks the required authentication, select another available browser before asking the user to sign in. You may select it without resetting the Node session. Preserve existing `iab`, `chrome`, and `browser` bindings when they are still useful. Existing tabs remain bound to the browser that created them. After selecting a different browser, obtain a tab from that browser before continuing and read its complete documentation.
-
-The ability to interact directly with browsers is exposed through the `browser-client` runtime via the `agent.browsers.*` API. Before trying to interact with a selected browser for the first time, you MUST emit and read the complete documentation returned by its `documentation()` call in one go. For the initial documentation read, run the exact direct `nodeRepl.write(await <browser>.documentation());` call shown in the applicable scenario above. Do not assign the documentation to a variable, inspect its length, slice it, truncate it, summarize it, or emit only an excerpt. Do not proactively split the documentation into pages or chunks. Only if the tool output itself explicitly reports that it was truncated may you emit and read smaller chunks until you have read the documentation in its entirety.
-
-Only the Node REPL `js` tool (`mcp__node_repl__js`) can be used to control the selected browser. Do not use external MCP browser-control tools, separate browser automation servers, or other browser skills for this surface. References to Playwright mean the in-skill `tab.playwright` API after browser-client setup.
-
-<!-- BROWSER_SKILL_EOF: This is the complete Browser skill. Do not request additional lines. -->
+## 工具使用原则
+- 先观察再操作
+- 工具失败时换策略，不要死循环同一选择器
+- 截图只保留关键证据，避免无意义刷屏
+- 达到足够结论后尽快结束并输出报告

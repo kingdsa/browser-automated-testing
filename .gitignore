@@ -37,3 +37,8 @@ __screenshots__/
 
 # Vite
 *.timestamp-*-*.mjs
+
+# agent runtime
+.env
+server/data/
+server/dist/
