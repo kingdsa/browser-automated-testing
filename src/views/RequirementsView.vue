@@ -422,27 +422,6 @@ function addFeature() {
         </div>
       </div>
       <div class="topbar__actions">
-        <button type="button" class="ghost" :disabled="!mindMapData" @click="readonlyMap = !readonlyMap">
-          {{ readonlyMap ? '启用编辑' : '只读预览' }}
-        </button>
-        <button type="button" class="ghost" :disabled="!mindMapData || mainTab !== 'map'" @click="mindMapRef?.fit()">
-          适应画布
-        </button>
-        <button type="button" class="ghost" @click="onPickJson">导入 JSON</button>
-        <input
-          ref="jsonInputRef"
-          class="hidden"
-          type="file"
-          accept=".json,application/json"
-          @change="onJsonFileChange"
-        />
-        <button type="button" class="ghost" :disabled="!mindMapData" @click="downloadJson">导出功能点</button>
-        <button type="button" class="ghost" :disabled="!testCases.length" @click="exportTestCases('md')">
-          导出用例 MD
-        </button>
-        <button type="button" class="ghost" :disabled="!testCases.length" @click="exportTestCases('json')">
-          导出用例 JSON
-        </button>
         <button type="button" class="ghost" @click="clearAll">清空</button>
       </div>
     </header>
@@ -574,20 +553,39 @@ function addFeature() {
             </button>
           </div>
           <div class="main-toolbar__actions">
-            <button
-              type="button"
-              class="ghost"
-              :disabled="!canGenerateCases"
-              @click="runGenerateTestCases"
-            >
-              {{ generatingCases ? '生成中...' : '生成测试用例' }}
-            </button>
-            <button type="button" class="ghost" :disabled="!testCases.length" @click="exportTestCases('md')">
-              导出 MD
-            </button>
-            <button type="button" class="ghost" :disabled="!testCases.length" @click="exportTestCases('json')">
-              导出 JSON
-            </button>
+            <template v-if="mainTab === 'map'">
+              <button type="button" class="ghost" :disabled="!mindMapData" @click="readonlyMap = !readonlyMap">
+                {{ readonlyMap ? '启用编辑' : '只读预览' }}
+              </button>
+              <button type="button" class="ghost" :disabled="!mindMapData" @click="mindMapRef?.fit()">
+                适应画布
+              </button>
+              <button type="button" class="ghost" @click="onPickJson">导入 JSON</button>
+              <input
+                ref="jsonInputRef"
+                class="hidden"
+                type="file"
+                accept=".json,application/json"
+                @change="onJsonFileChange"
+              />
+              <button type="button" class="ghost" :disabled="!mindMapData" @click="downloadJson">导出功能点</button>
+            </template>
+            <template v-else>
+              <button
+                type="button"
+                class="ghost"
+                :disabled="!canGenerateCases"
+                @click="runGenerateTestCases"
+              >
+                {{ generatingCases ? '生成中...' : '生成测试用例' }}
+              </button>
+              <button type="button" class="ghost" :disabled="!testCases.length" @click="exportTestCases('md')">
+                导出 MD
+              </button>
+              <button type="button" class="ghost" :disabled="!testCases.length" @click="exportTestCases('json')">
+                导出 JSON
+              </button>
+            </template>
           </div>
         </div>
 
