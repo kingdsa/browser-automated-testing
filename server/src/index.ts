@@ -16,7 +16,7 @@ app.use('/api', chatRouter)
 app.get('/', (_req, res) => {
   res.json({
     name: 'browser-automated-testing-agent',
-    endpoints: ['/api/health', '/api/skills', '/api/chat', '/screenshots/*'],
+    endpoints: ['/api/health', '/api/defaults', '/api/skills', '/api/browser/tabs', '/api/chat', '/screenshots/*'],
   })
 })
 

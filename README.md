@@ -9,6 +9,9 @@ AI 驱动的前端自动化检测工具：输入目标 URL + 测试提示词，A
 - 对接第三方中转站（OpenAI 兼容：`base_url` + `api_key` + `model`）
 - 流式 SSE 对话，实时显示思考文本与工具执行
 - Playwright 控制浏览器：打开页面、点击、输入、滚动、截图
+- 支持登录态：
+  - **推荐**：新开浏览器 + “等待手动登录”（无需配置 Chrome/Edge/360）
+  - **可选**：自动扫描本机远程调试端口，附着已打开标签（保留登录态）
 - 自动采集网络请求与控制台日志
 - Skills 可扩展（`skills/*/SKILL.md`）
 
@@ -32,14 +35,17 @@ npm run dev
 
 1. 左侧填写中转站 `Base URL`、`API Key`、`Model`
 2. 填写目标 URL（或在提示词里说明）
-3. 输入测试需求，例如：
+3. 若页面需要登录，二选一：
+   - 勾选 **等待手动登录**：开始后在弹出浏览器里登录，系统检测到业务页后自动继续
+   - 或用远程调试方式启动浏览器并打开已登录页面，点“重新扫描”附着该标签（Chrome/Edge/360 等 Chromium 内核通用，无需按品牌配置）
+4. 输入测试需求，例如：
 
 ```text
 像测试人员一样检查当前页面：布局、可用性、接口错误、控制台报错，并输出分级问题报告。
 ```
 
-4. 观察流式输出与工具轨迹（snapshot / network / screenshot 等）
-5. 查看最终问题报告
+5. 观察流式输出与工具轨迹（snapshot / network / screenshot 等）
+6. 查看最终问题报告
 
 ## 架构
 
@@ -74,7 +80,12 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
   "session": {
     "targetUrl": "https://example.com",
     "headless": false,
-    "maxSteps": 16
+    "maxSteps": 16,
+    "browserMode": "auto",
+    "waitForLogin": true,
+    "loginWaitSeconds": 180,
+    "cdpEndpoint": "",
+    "attachUrlIncludes": ""
   }
 }
 ```
@@ -103,15 +114,45 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 
 | 能力 | Codex Desktop | 本项目 |
 | --- | --- | --- |
-| 控制用户已登录 Chrome | ✅ 扩展/native host | 可选后续增强 |
+| 控制用户已登录 Chrome | ✅ 扩展/native host | ✅ 手动登录 / CDP 附着（Chromium 系） |
 | 独立可分发产品 | ❌ | ✅ |
 | 自定义中转站 LLM | 取决于 Codex 配置 | ✅ 页面可配 |
 | 流式对话 UI | Codex 内置 | ✅ 自研 |
 | Skill 驱动测试策略 | ✅ | ✅ `skills/` |
 
+## 登录态说明
+
+### 方案 A（推荐，零配置）
+1. 浏览器模式选 `auto` 或 `launch`
+2. 勾选 **等待手动登录**
+3. 开始测试后，在弹出窗口完成登录
+4. 系统识别到非登录页后自动继续
+
+### 方案 B（附着已打开标签）
+1. 用远程调试端口启动任意 Chromium 内核浏览器（Chrome / Edge / 360 / Arc…）
+2. 在该窗口登录并打开目标页
+3. 侧边栏点 **重新扫描**，点选标签；或保持 `auto` 自动附着
+4. 不需要按浏览器品牌分别配置路径
+
+示例：
+
+```bash
+# Chrome
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/chrome-bat-profile"
+
+# Edge
+/Applications/Microsoft\ Edge.app/Contents/MacOS/Microsoft\ Edge \
+  --remote-debugging-port=9223 \
+  --user-data-dir="$HOME/edge-bat-profile"
+```
+
+> 说明：Firefox 不走 CDP，当前不支持直接附着；请用方案 A 手动登录。
+
 ## 后续可增强
 
-- 连接用户本机 Chrome（CDP / 扩展）复用登录态
+- 浏览器扩展一键附着日常窗口（无需 remote debugging）
 - 多页用例编排与回归报告导出
 - 视觉回归（截图 diff）
 - 录制操作轨迹回放

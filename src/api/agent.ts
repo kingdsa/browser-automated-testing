@@ -21,6 +21,12 @@ export async function streamChat(input: {
         targetUrl: input.settings.session.targetUrl || undefined,
         headless: input.settings.session.headless,
         maxSteps: input.settings.session.maxSteps,
+        browserMode: input.settings.session.browserMode,
+        cdpEndpoint: input.settings.session.cdpEndpoint || undefined,
+        attachUrlIncludes:
+          input.settings.session.attachUrlIncludes || input.settings.session.targetUrl || undefined,
+        waitForLogin: input.settings.session.waitForLogin,
+        loginWaitSeconds: input.settings.session.loginWaitSeconds,
       },
     }),
     signal: input.handlers.signal,
@@ -90,6 +96,35 @@ export async function fetchDefaults() {
   if (!res.ok) throw new Error('获取默认配置失败')
   return res.json() as Promise<{
     llm: { baseUrl: string; model: string; hasApiKey: boolean }
-    session: { maxSteps: number; headless: boolean }
+    session: {
+      maxSteps: number
+      headless: boolean
+      browserMode: 'auto' | 'launch' | 'attach'
+      waitForLogin: boolean
+      loginWaitSeconds: number
+      cdpEndpoint: string
+    }
+  }>
+}
+
+export async function fetchBrowserTabs(endpoint?: string) {
+  const query = endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ''
+  const res = await fetch(`/api/browser/tabs${query}`)
+  if (res.status === 404) {
+    return {
+      ok: false,
+      endpoints: [],
+      tabs: [],
+      hint: '后端还是旧进程（/api/browser/tabs 404）。请重启本项目：先停掉占用 8787 的旧 agent，再执行 npm run dev。',
+      error: 'Cannot GET /api/browser/tabs',
+    }
+  }
+  if (!res.ok) throw new Error(`获取浏览器标签失败: HTTP ${res.status}`)
+  return res.json() as Promise<{
+    ok: boolean
+    endpoints: Array<{ endpoint: string; browser: string }>
+    tabs: Array<{ endpoint: string; browser?: string; index: number; url: string; title: string }>
+    hint?: string
+    error?: string
   }>
 }

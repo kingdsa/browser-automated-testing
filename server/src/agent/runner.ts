@@ -108,11 +108,34 @@ export async function runAgent(input: RunAgentInput): Promise<void> {
     },
   })
 
-  const browser = new BrowserSession({ headless: sessionConfig?.headless ?? false })
+  const browserMode = sessionConfig?.browserMode ?? 'auto'
+  const waitForLogin = Boolean(sessionConfig?.waitForLogin)
+  // Attach / manual login must show a real window.
+  const headless = waitForLogin || browserMode === 'attach' ? false : (sessionConfig?.headless ?? false)
+  const browser = new BrowserSession({
+    headless,
+    mode: browserMode,
+    cdpEndpoint: sessionConfig?.cdpEndpoint,
+    attachUrlIncludes: sessionConfig?.attachUrlIncludes || targetUrl,
+    waitForLogin,
+    loginWaitSeconds: sessionConfig?.loginWaitSeconds,
+  })
 
   try {
+    if (browserMode === 'attach' || browserMode === 'auto') {
+      onEvent({
+        type: 'status',
+        data: {
+          message:
+            browserMode === 'attach'
+              ? '正在附着已打开的浏览器标签…'
+              : '优先附着已打开标签；若未发现则新开浏览器…',
+        },
+      })
+    }
+
     if (targetUrl) {
-      onEvent({ type: 'status', data: { message: `正在打开目标页: ${targetUrl}` } })
+      onEvent({ type: 'status', data: { message: `正在准备目标页: ${targetUrl}` } })
       const opened = await browser.openUrl(targetUrl)
       onEvent({
         type: 'tool_result',
@@ -123,7 +146,62 @@ export async function runAgent(input: RunAgentInput): Promise<void> {
       })
       history.push({
         role: 'system',
-        content: `系统已预打开目标 URL。结果: ${opened.summary}`,
+        content: `系统已准备目标页。结果: ${opened.summary}`,
+      })
+    } else if (browserMode === 'attach' || browserMode === 'auto') {
+      // Attach to whatever tab is already open even without explicit URL.
+      await browser.ensurePage()
+      const info = browser.getAttachmentInfo()
+      if (info) {
+        onEvent({
+          type: 'status',
+          data: {
+            message: info.reusedExistingTab
+              ? `已附着标签: ${info.title || info.url}`
+              : `已启动浏览器: ${info.url || 'about:blank'}`,
+          },
+        })
+        history.push({
+          role: 'system',
+          content: `当前浏览器状态: mode=${info.mode}, reused=${info.reusedExistingTab}, url=${info.url}, title=${info.title}`,
+        })
+      }
+    }
+
+    if (sessionConfig?.waitForLogin || browser.shouldWaitForLogin()) {
+      onEvent({ type: 'status', data: { message: '等待你在浏览器中手动登录…' } })
+      const loginResult = await browser.waitForManualLogin({
+        onProgress: (message) => onEvent({ type: 'status', data: { message } }),
+      })
+      onEvent({
+        type: 'tool_result',
+        data: {
+          name: 'wait_for_login',
+          result: loginResult,
+        },
+      })
+      history.push({
+        role: 'system',
+        content: `手动登录等待结果: ${loginResult.summary}`,
+      })
+      if (!loginResult.ok && browserMode === 'attach') {
+        // Continue anyway; agent can still inspect whatever page is visible.
+        onEvent({ type: 'status', data: { message: '登录等待超时，将基于当前可见页面继续检测' } })
+      }
+    }
+
+    const attachment = browser.getAttachmentInfo()
+    if (attachment) {
+      onEvent({
+        type: 'session',
+        data: {
+          sessionId,
+          targetUrl: targetUrl || attachment.url || null,
+          browserMode: attachment.mode,
+          attachedUrl: attachment.url,
+          reusedExistingTab: attachment.reusedExistingTab,
+          cdpEndpoint: attachment.endpoint || sessionConfig?.cdpEndpoint || null,
+        },
       })
     }
 

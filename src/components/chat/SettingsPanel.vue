@@ -1,12 +1,23 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { fetchHealth, fetchSkills } from '@/api/agent'
+import { computed, onMounted, ref } from 'vue'
+import { fetchBrowserTabs, fetchDefaults, fetchHealth, fetchSkills } from '@/api/agent'
 import { useSettingsStore } from '@/stores/settings'
 
 const settingsStore = useSettingsStore()
 const health = ref<'unknown' | 'ok' | 'down'>('unknown')
 const skills = ref<Array<{ name: string; description: string }>>([])
 const hasServerKey = ref(false)
+const tabsLoading = ref(false)
+const tabsHint = ref('')
+const tabs = ref<Array<{ endpoint: string; browser?: string; index: number; url: string; title: string }>>([])
+const endpoints = ref<Array<{ endpoint: string; browser: string }>>([])
+
+const browserModeLabel = computed(() => {
+  const mode = settingsStore.settings.session.browserMode
+  if (mode === 'attach') return '只附着已打开标签'
+  if (mode === 'launch') return '只新开浏览器'
+  return '自动（推荐）'
+})
 
 async function refreshMeta() {
   await settingsStore.hydrateFromServer()
@@ -25,11 +36,38 @@ async function refreshMeta() {
   }
 
   try {
-    const defaults = await (await import('@/api/agent')).fetchDefaults()
+    const defaults = await fetchDefaults()
     hasServerKey.value = defaults.llm.hasApiKey
   } catch {
     hasServerKey.value = false
   }
+
+  await refreshTabs()
+}
+
+async function refreshTabs() {
+  tabsLoading.value = true
+  try {
+    const data = await fetchBrowserTabs(settingsStore.settings.session.cdpEndpoint || undefined)
+    tabs.value = data.tabs || []
+    endpoints.value = data.endpoints || []
+    tabsHint.value = data.error
+      ? `${data.hint || '扫描失败'}（${data.error}）`
+      : data.hint || ''
+  } catch (error) {
+    tabs.value = []
+    endpoints.value = []
+    tabsHint.value = error instanceof Error ? error.message : '无法探测浏览器标签'
+  } finally {
+    tabsLoading.value = false
+  }
+}
+
+function useTab(url: string) {
+  settingsStore.settings.session.targetUrl = url
+  settingsStore.settings.session.attachUrlIncludes = url
+  settingsStore.settings.session.browserMode = 'attach'
+  settingsStore.settings.session.waitForLogin = false
 }
 
 onMounted(refreshMeta)
@@ -83,12 +121,41 @@ onMounted(refreshMeta)
         <input
           v-model="settingsStore.settings.session.targetUrl"
           type="url"
-          placeholder="https://example.com"
+          placeholder="https://example.com（可空：直接测已打开标签）"
+        />
+      </label>
+      <label>
+        <span>浏览器模式 · {{ browserModeLabel }}</span>
+        <select v-model="settingsStore.settings.session.browserMode">
+          <option value="auto">自动：先附着已打开标签，失败再新开</option>
+          <option value="attach">只附着已打开标签（保留登录态）</option>
+          <option value="launch">只新开浏览器</option>
+        </select>
+      </label>
+      <p class="hint">
+        不用区分 Chrome / Edge / 360：只要浏览器开了远程调试端口，系统会自动扫描并附着。
+        普通日常窗口默认不可附着；更省事的方式是勾选“等待手动登录”。
+      </p>
+      <label class="inline">
+        <input v-model="settingsStore.settings.session.waitForLogin" type="checkbox" />
+        <span>等待手动登录（推荐，免配浏览器）</span>
+      </label>
+      <label v-if="settingsStore.settings.session.waitForLogin">
+        <span>登录等待秒数</span>
+        <input
+          v-model.number="settingsStore.settings.session.loginWaitSeconds"
+          type="number"
+          min="10"
+          max="900"
         />
       </label>
       <label class="inline">
-        <input v-model="settingsStore.settings.session.headless" type="checkbox" />
-        <span>无头模式（不显示浏览器窗口）</span>
+        <input
+          v-model="settingsStore.settings.session.headless"
+          type="checkbox"
+          :disabled="settingsStore.settings.session.browserMode === 'attach' || settingsStore.settings.session.waitForLogin"
+        />
+        <span>无头模式（附着/手动登录时自动关闭）</span>
       </label>
       <label>
         <span>最大 Agent 步数</span>
@@ -99,6 +166,42 @@ onMounted(refreshMeta)
           max="50"
         />
       </label>
+      <details class="advanced">
+        <summary>高级：附着调试端口（可选）</summary>
+        <label>
+          <span>CDP Endpoint（留空=自动扫描）</span>
+          <input
+            v-model="settingsStore.settings.session.cdpEndpoint"
+            type="text"
+            placeholder="http://127.0.0.1:9222"
+          />
+        </label>
+        <label>
+          <span>优先匹配 URL 包含</span>
+          <input
+            v-model="settingsStore.settings.session.attachUrlIncludes"
+            type="text"
+            placeholder="默认用目标 URL"
+          />
+        </label>
+        <div class="section__title-row">
+          <strong>可附着标签</strong>
+          <button class="ghost" type="button" :disabled="tabsLoading" @click="refreshTabs">
+            {{ tabsLoading ? '扫描中…' : '重新扫描' }}
+          </button>
+        </div>
+        <p class="hint">{{ tabsHint || '点击重新扫描，查找本机已开启远程调试的浏览器标签。' }}</p>
+        <ul v-if="tabs.length" class="tab-list">
+          <li v-for="tab in tabs" :key="`${tab.endpoint}-${tab.index}-${tab.url}`">
+            <button class="tab-item" type="button" @click="useTab(tab.url)">
+              <strong>{{ tab.title || '未命名标签' }}</strong>
+              <span>{{ tab.url }}</span>
+              <em>{{ tab.browser || tab.endpoint }}</em>
+            </button>
+          </li>
+        </ul>
+        <p v-else class="muted">当前未发现可附着标签。</p>
+      </details>
     </section>
 
     <section class="section">
@@ -265,5 +368,83 @@ input:focus {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--input);
+  color: var(--text);
+  outline: none;
+}
+
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.advanced summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  user-select: none;
+}
+
+.tab-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.tab-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--input);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.tab-item:hover {
+  border-color: var(--accent);
+}
+
+.tab-item strong {
+  font-size: 13px;
+}
+
+.tab-item span,
+.tab-item em {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

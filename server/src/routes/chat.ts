@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { runAgent } from '../agent/runner.js'
 import { config } from '../config.js'
 import { loadSkills } from '../skills/loader.js'
+import { BrowserSession } from '../browser/session.js'
 
 const chatBodySchema = z.object({
   messages: z
@@ -25,6 +26,11 @@ const chatBodySchema = z.object({
       targetUrl: z.string().url().optional().or(z.literal('')),
       headless: z.boolean().optional(),
       maxSteps: z.number().int().min(1).max(50).optional(),
+      browserMode: z.enum(['auto', 'launch', 'attach']).optional(),
+      cdpEndpoint: z.string().optional().or(z.literal('')),
+      attachUrlIncludes: z.string().optional().or(z.literal('')),
+      waitForLogin: z.boolean().optional(),
+      loginWaitSeconds: z.number().int().min(10).max(900).optional(),
     })
     .optional(),
 })
@@ -46,6 +52,10 @@ chatRouter.get('/defaults', (_req, res) => {
     session: {
       maxSteps: config.defaultMaxSteps,
       headless: false,
+      browserMode: 'auto',
+      waitForLogin: false,
+      loginWaitSeconds: 180,
+      cdpEndpoint: '',
     },
   })
 })
@@ -55,6 +65,28 @@ chatRouter.get('/skills', async (_req, res) => {
   res.json({
     skills: skills.map((s) => ({ name: s.name, description: s.description })),
   })
+})
+
+chatRouter.get('/browser/tabs', async (req, res) => {
+  const endpoint = typeof req.query.endpoint === 'string' ? req.query.endpoint : undefined
+  try {
+    const [endpoints, tabs] = await Promise.all([
+      BrowserSession.discoverCdpEndpoints(),
+      BrowserSession.listCdpTabs(endpoint),
+    ])
+    res.json({
+      ok: true,
+      endpoints,
+      tabs,
+      hint:
+        tabs.length > 0
+          ? '已发现可附着标签。可直接开始测试，系统会优先使用已打开页面（含登录态）。'
+          : '未发现可附着标签。可新开浏览器并勾选“等待手动登录”，或用远程调试方式启动 Chrome/Edge 后刷新。',
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    res.status(500).json({ ok: false, error: message, endpoints: [], tabs: [] })
+  }
 })
 
 chatRouter.post('/chat', async (req, res) => {
@@ -95,6 +127,11 @@ chatRouter.post('/chat', async (req, res) => {
         targetUrl: body.session?.targetUrl || undefined,
         headless: body.session?.headless,
         maxSteps: body.session?.maxSteps,
+        browserMode: body.session?.browserMode,
+        cdpEndpoint: body.session?.cdpEndpoint || undefined,
+        attachUrlIncludes: body.session?.attachUrlIncludes || undefined,
+        waitForLogin: body.session?.waitForLogin,
+        loginWaitSeconds: body.session?.loginWaitSeconds,
       },
       signal: abortController.signal,
       onEvent: (event) => writeEvent(event),

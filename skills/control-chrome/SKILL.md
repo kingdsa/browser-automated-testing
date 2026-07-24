@@ -27,8 +27,13 @@ description: "用浏览器自动化能力模拟测试人员：打开页面、检
 5. **可用性**
    - 空状态、加载态、错误态是否友好
 
+## 登录态
+- 系统可能已附着用户已打开标签，或已等待用户手动登录。
+- 若页面仍是登录页：优先提示用户完成登录，或使用当前可见已登录内容继续；不要反复盲目点击登录。
+- 不要主动退出登录，不要清理 Cookie。
+
 ## 推荐操作顺序
-1. `open_url` / 系统预打开 URL
+1. `open_url` / 系统预打开或附着已有标签
 2. `get_page_snapshot` 了解结构与可交互元素
 3. `get_console_logs` + `get_network_logs`（可 onlyFailed）
 4. 对核心路径 `click` / `type_text` / `scroll_page` / `wait_for`

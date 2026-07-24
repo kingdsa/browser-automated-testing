@@ -27,10 +27,17 @@ export interface LlmSettings {
   model: string
 }
 
+export type BrowserMode = 'auto' | 'launch' | 'attach'
+
 export interface SessionSettings {
   targetUrl: string
   headless: boolean
   maxSteps: number
+  browserMode: BrowserMode
+  cdpEndpoint: string
+  attachUrlIncludes: string
+  waitForLogin: boolean
+  loginWaitSeconds: number
 }
 
 export interface AppSettings {

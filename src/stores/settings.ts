@@ -15,6 +15,11 @@ const defaultSettings: AppSettings = {
     targetUrl: '',
     headless: false,
     maxSteps: 16,
+    browserMode: 'auto',
+    cdpEndpoint: '',
+    attachUrlIncludes: '',
+    waitForLogin: false,
+    loginWaitSeconds: 180,
   },
 }
 
@@ -22,7 +27,13 @@ function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return structuredClone(defaultSettings)
-    return { ...structuredClone(defaultSettings), ...JSON.parse(raw) }
+    const parsed = JSON.parse(raw) as Partial<AppSettings>
+    return {
+      ...structuredClone(defaultSettings),
+      ...parsed,
+      llm: { ...defaultSettings.llm, ...(parsed.llm || {}) },
+      session: { ...defaultSettings.session, ...(parsed.session || {}) },
+    }
   } catch {
     return structuredClone(defaultSettings)
   }
