@@ -19,8 +19,8 @@ AI 驱动的前端自动化检测工具：输入目标 URL + 测试提示词，A
 - 自动采集网络请求与控制台日志
 - 最终输出完整 Markdown 测试报告；界面可 **保存最后一次 AI 的 MD 文档**
 - Skills 可扩展（`skills/*/SKILL.md`）
-- **需求分析**：上传 PRD/需求文档，AI 提取功能点（可增删改），并以可编辑逻辑思维导图展示
-- **测试用例**：基于功能点一键生成测试用例，支持在线编辑，导出 Markdown / JSON
+- **需求分析**：上传 PRD/需求文档，AI 提取功能点（可增删改），并以可编辑逻辑思维导图展示；生成过程先展示对话流，完成后切换到思维导图，支持中途取消
+- **测试用例**：基于功能点一键生成测试用例，支持在线编辑，导出 Markdown / JSON；同样先流式展示生成过程，可取消
 
 ## 快速开始
 
@@ -125,6 +125,10 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 
 上传需求文档或粘贴文本，AI 提取功能点并返回思维导图 JSON（`multipart/form-data`：`file` 可选、`content` 可选、`llm` JSON 字符串）。
 
+### `POST /api/requirements/analyze/stream`
+
+同上，但以 SSE 流式返回：`status` / `delta` / `result` / `error` / `done`。客户端断开连接可取消生成。
+
 ### `POST /api/requirements/extract`
 
 仅解析上传文档文本（支持 `.md/.txt/.docx`）。
@@ -132,6 +136,10 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 ### `POST /api/requirements/test-cases`
 
 基于功能点树 / 列表生成可编辑测试用例。
+
+### `POST /api/requirements/test-cases/stream`
+
+同上，SSE 流式返回 `status` / `delta` / `result` / `error` / `done`，支持取消。
 
 ```json
 {

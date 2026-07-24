@@ -43,6 +43,13 @@ export interface GenerateTestCasesResult {
   caseCount: number
 }
 
+export type TestCaseStreamEvent =
+  | { type: 'status'; data: { message: string } }
+  | { type: 'delta'; data: { content: string } }
+  | { type: 'result'; data: GenerateTestCasesResult }
+  | { type: 'error'; data: { message: string } }
+  | { type: 'done'; data: Record<string, never> }
+
 const prioritySchema = z.enum(['P0', 'P1', 'P2', 'P3'])
 
 const testCaseSchema = z.object({
@@ -213,36 +220,26 @@ JSON 结构必须是：
 ${featureJson}`
 }
 
-export async function generateTestCasesFromFeatures(input: {
-  llm: LlmSettings
-  title?: string
-  summary?: string
-  root?: MindMapNode | null
-  features?: FeaturePoint[]
-}): Promise<GenerateTestCasesResult> {
-  const { llm } = input
-  if (!llm.apiKey?.trim()) throw new Error('请先配置 API Key')
-  if (!llm.baseUrl?.trim()) throw new Error('请先配置 Base URL')
-  if (!llm.model?.trim()) throw new Error('请先配置模型名称')
+function createAbortError(message = '已取消生成') {
+  const error = new Error(message)
+  error.name = 'AbortError'
+  return error
+}
 
-  const features =
-    (input.features && input.features.length > 0
-      ? input.features
-      : flattenFeatures(input.root || null)
-    ).map((item) => ({
-      path: String(item.path || item.text || '').trim(),
-      text: String(item.text || '').trim() || '未命名功能',
-      ...(item.note ? { note: String(item.note) } : {}),
-      ...(item.tags?.length ? { tags: item.tags.map(String) } : {}),
-    }))
-    .filter((item) => item.text)
+function isAbortError(error: unknown, signal?: AbortSignal) {
+  if (signal?.aborted) return true
+  if (!error || typeof error !== 'object') return false
+  const name = String((error as { name?: string }).name || '')
+  const message = String((error as { message?: string }).message || '')
+  return (
+    name === 'AbortError' ||
+    name === 'APIUserAbortError' ||
+    /aborted|abort|cancel/i.test(message)
+  )
+}
 
-  if (!features.length) throw new Error('请先生成或导入功能点')
-
-  const title = input.title?.trim() || '需求功能点'
-  const summary = input.summary?.trim() || ''
-
-  const client = new OpenAI({
+function createClient(llm: LlmSettings) {
+  return new OpenAI({
     apiKey: llm.apiKey,
     baseURL: normalizeBaseUrl(llm.baseUrl),
     defaultHeaders: {
@@ -256,53 +253,129 @@ export async function generateTestCasesFromFeatures(input: {
       'X-Stainless-Retry-Count': null,
     },
   })
+}
+
+function assertLlmReady(llm: LlmSettings) {
+  if (!llm.apiKey?.trim()) throw new Error('请先配置 API Key')
+  if (!llm.baseUrl?.trim()) throw new Error('请先配置 Base URL')
+  if (!llm.model?.trim()) throw new Error('请先配置模型名称')
+}
+
+function parseTestCaseResult(raw: string, title: string, features: FeaturePoint[]): GenerateTestCasesResult {
+  if (!raw.trim()) throw new Error('模型未返回测试用例')
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stripCodeFence(raw))
+  } catch {
+    const match = raw.match(/\{[\s\S]*\}/)
+    if (!match) throw new Error('模型返回非 JSON')
+    parsed = JSON.parse(match[0])
+  }
+
+  const validated = responseSchema.safeParse(parsed)
+  if (!validated.success) throw new Error('模型返回结构不完整')
+
+  const cases = normalizeCases(validated.data.cases, features)
+  return {
+    title: validated.data.title.trim() || `${title}测试用例`,
+    summary: validated.data.summary.trim() || `覆盖 ${features.length} 个功能点，共 ${cases.length} 条用例`,
+    cases,
+    caseCount: cases.length,
+  }
+}
+
+export async function generateTestCasesFromFeatures(input: {
+  llm: LlmSettings
+  title?: string
+  summary?: string
+  root?: MindMapNode | null
+  features?: FeaturePoint[]
+}): Promise<GenerateTestCasesResult> {
+  return streamGenerateTestCasesFromFeatures({
+    ...input,
+    onEvent: () => undefined,
+  })
+}
+
+export async function streamGenerateTestCasesFromFeatures(input: {
+  llm: LlmSettings
+  title?: string
+  summary?: string
+  root?: MindMapNode | null
+  features?: FeaturePoint[]
+  signal?: AbortSignal
+  onEvent?: (event: TestCaseStreamEvent) => void
+}): Promise<GenerateTestCasesResult> {
+  const { llm, signal } = input
+  const emit = input.onEvent || (() => undefined)
+  assertLlmReady(llm)
+  if (signal?.aborted) throw createAbortError()
+
+  const features =
+    input.features && input.features.length
+      ? input.features
+      : flattenFeatures(input.root || null)
+
+  if (!features.length) throw new Error('请先生成或导入功能点')
+
+  const title = input.title?.trim() || '需求功能点'
+  const summary = input.summary?.trim() || ''
+  const client = createClient(llm)
+
+  emit({ type: 'status', data: { message: `正在根据 ${features.length} 个功能点生成测试用例...` } })
 
   try {
-    const completion = await client.chat.completions.create({
-      model: llm.model,
-      temperature: 0.2,
-      messages: [
-        {
-          role: 'system',
-          content:
-            '你是资深测试架构师，擅长把功能点拆解为可执行、可回归的测试用例。始终只输出合法 JSON。',
-        },
-        {
-          role: 'user',
-          content: buildPrompt({ title, summary, features }),
-        },
-      ],
-    })
+    const stream = await client.chat.completions.create(
+      {
+        model: llm.model,
+        temperature: 0.2,
+        stream: true,
+        messages: [
+          {
+            role: 'system',
+            content:
+              '你是资深测试架构师，擅长把功能点拆解为可执行、可回归的测试用例。始终只输出合法 JSON。',
+          },
+          {
+            role: 'user',
+            content: buildPrompt({ title, summary, features }),
+          },
+        ],
+      },
+      { signal },
+    )
 
-    const raw = completion.choices[0]?.message?.content || ''
-    if (!raw.trim()) throw new Error('模型未返回测试用例')
-
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(stripCodeFence(raw))
-    } catch {
-      const match = raw.match(/\{[\s\S]*\}/)
-      if (!match) throw new Error('模型返回非 JSON')
-      parsed = JSON.parse(match[0])
+    let raw = ''
+    for await (const chunk of stream) {
+      if (signal?.aborted) throw createAbortError()
+      const delta = chunk.choices?.[0]?.delta?.content
+      if (!delta) continue
+      raw += delta
+      emit({ type: 'delta', data: { content: delta } })
     }
 
-    const validated = responseSchema.safeParse(parsed)
-    if (!validated.success) throw new Error('模型返回结构不完整')
+    if (signal?.aborted) throw createAbortError()
 
-    const cases = normalizeCases(validated.data.cases, features)
-    return {
-      title: validated.data.title.trim() || `${title}测试用例`,
-      summary: validated.data.summary.trim() || `覆盖 ${features.length} 个功能点，共 ${cases.length} 条用例`,
-      cases,
-      caseCount: cases.length,
-    }
+    emit({ type: 'status', data: { message: '模型输出完成，正在解析测试用例...' } })
+    const result = parseTestCaseResult(raw, title, features)
+    emit({ type: 'result', data: result })
+    emit({ type: 'done', data: {} })
+    return result
   } catch (error) {
+    if (isAbortError(error, signal)) {
+      throw createAbortError()
+    }
     // Keep product usable even when model output is unstable.
     const fallback = fallbackCases(title, features)
     const reason = error instanceof Error ? error.message : String(error)
-    return {
+    const result = {
       ...fallback,
       summary: `${fallback.summary}；原因：${reason}`,
     }
+    emit({ type: 'status', data: { message: `模型结果不稳定，已使用降级用例：${reason}` } })
+    emit({ type: 'result', data: result })
+    emit({ type: 'done', data: {} })
+    return result
   }
 }

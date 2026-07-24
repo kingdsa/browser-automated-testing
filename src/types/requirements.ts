@@ -52,3 +52,11 @@ export interface GenerateTestCasesResult {
   caseCount: number
   error?: string
 }
+
+
+export interface GenerationMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  streaming?: boolean
+}

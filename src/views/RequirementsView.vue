@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import AppNav from '@/components/requirements/AppNav.vue'
 import FeatureMindMap from '@/components/requirements/FeatureMindMap.vue'
+import GenerationStreamPanel from '@/components/requirements/GenerationStreamPanel.vue'
 import TestCasePanel from '@/components/requirements/TestCasePanel.vue'
-import { analyzeRequirement, extractRequirementFile, generateTestCases } from '@/api/requirements'
+import {
+  extractRequirementFile,
+  streamAnalyzeRequirement,
+  streamGenerateTestCases,
+} from '@/api/requirements'
 import { fetchDefaults } from '@/api/agent'
 import { useSettingsStore } from '@/stores/settings'
-import type { MindMapNode, TestCase } from '@/types/requirements'
+import type { GenerationMessage, GenerateTestCasesResult, MindMapNode, RequirementAnalysisResult, TestCase } from '@/types/requirements'
 import { defaultTestCaseExportName, downloadTextFile, testCasesToMarkdown } from '@/utils/testCases'
 
 const settings = useSettingsStore()
@@ -35,11 +40,22 @@ const testCaseTitle = ref('')
 const testCaseSummary = ref('')
 const testCases = ref<TestCase[]>([])
 
+const showGenerationPanel = ref(false)
+const generationKind = ref<'analyze' | 'cases' | null>(null)
+const generationMessages = ref<GenerationMessage[]>([])
+const generationRunning = ref(false)
+const generationStatus = ref('')
+const generationError = ref('')
+let generationAbort: AbortController | null = null
+let generationSeq = 0
+
 const canAnalyze = computed(() => {
   const llm = settings.settings.llm
   const hasKey = Boolean(llm.apiKey) || serverHasKey.value
   const hasContent = Boolean(selectedFile.value || draftText.value.trim())
-  return Boolean(llm.baseUrl && hasKey && llm.model && hasContent && !analyzing.value)
+  return Boolean(
+    llm.baseUrl && hasKey && llm.model && hasContent && !analyzing.value && !generatingCases.value,
+  )
 })
 
 const canGenerateCases = computed(() => {
@@ -135,70 +151,266 @@ function clearAll() {
   testCaseTitle.value = ''
   testCaseSummary.value = ''
   mainTab.value = 'map'
+  stopGeneration(false)
+  showGenerationPanel.value = false
+  generationKind.value = null
+  generationMessages.value = []
+  generationStatus.value = ''
+  generationError.value = ''
 }
+
+function uid(prefix: string) {
+  generationSeq += 1
+  return `${prefix}_${Date.now()}_${generationSeq}`
+}
+
+function llmPayload() {
+  return {
+    baseUrl: settings.settings.llm.baseUrl,
+    apiKey: settings.settings.llm.apiKey,
+    model: settings.settings.llm.model,
+  }
+}
+
+function beginGeneration(kind: 'analyze' | 'cases', userText: string, assistantPlaceholder = '') {
+  stopGeneration(false)
+  generationAbort = new AbortController()
+  generationKind.value = kind
+  showGenerationPanel.value = true
+  generationRunning.value = true
+  generationStatus.value = kind === 'analyze' ? '准备分析功能点...' : '准备生成测试用例...'
+  generationError.value = ''
+  errorText.value = ''
+  statusText.value = generationStatus.value
+  generationMessages.value = [
+    {
+      id: uid('user'),
+      role: 'user',
+      content: userText,
+    },
+    {
+      id: uid('assistant'),
+      role: 'assistant',
+      content: assistantPlaceholder,
+      streaming: true,
+    },
+  ]
+}
+
+function currentAssistant() {
+  return [...generationMessages.value].reverse().find((m) => m.role === 'assistant') || null
+}
+
+function appendAssistantDelta(content: string) {
+  const assistant = currentAssistant()
+  if (!assistant) return
+  assistant.content += content
+}
+
+function finishAssistant(content?: string) {
+  const assistant = currentAssistant()
+  if (!assistant) return
+  if (typeof content === 'string' && content && !assistant.content) assistant.content = content
+  assistant.streaming = false
+  if (!assistant.content) assistant.content = '本次没有生成文本输出。'
+}
+
+function stopGeneration(updateUi = true) {
+  if (generationAbort) {
+    generationAbort.abort()
+    generationAbort = null
+  }
+  if (!updateUi) return
+  generationRunning.value = false
+  analyzing.value = false
+  generatingCases.value = false
+  const assistant = currentAssistant()
+  if (assistant?.streaming) {
+    assistant.streaming = false
+    if (!assistant.content) assistant.content = '已取消生成。'
+  }
+  generationStatus.value = '已取消生成'
+  statusText.value = '已取消生成'
+}
+
+function dismissGenerationPanel() {
+  if (generationRunning.value) stopGeneration(true)
+  showGenerationPanel.value = false
+}
+
+const generationPanelTitle = computed(() => {
+  if (generationKind.value === 'cases') return 'AI 正在生成测试用例'
+  if (generationKind.value === 'analyze') return 'AI 正在分析功能点'
+  return 'AI 生成过程'
+})
+
+const generationPanelSubtitle = computed(() => {
+  if (generationRunning.value) return '流式输出中，可随时取消'
+  if (generationError.value) return '生成失败，可返回后重试'
+  if (generationStatus.value.includes('取消')) return '已取消，可返回结果页'
+  return '生成完成，可返回查看结果'
+})
 
 async function runAnalyze() {
   if (!canAnalyze.value) return
   analyzing.value = true
-  errorText.value = ''
-  statusText.value = 'AI 正在分析需求文档中的功能点...'
+  const sourceName = fileName.value || selectedFile.value?.name || 'requirement.md'
+  const preview = draftText.value.trim()
+  const previewText = preview
+    ? preview.slice(0, 500) + (preview.length > 500 ? '\n\n...(已截断预览)' : '')
+    : `（将解析上传文件：${sourceName}）`
+
+  beginGeneration(
+    'analyze',
+    `请分析需求文档「${sourceName}」，提取可测试功能点，并输出思维导图 JSON。\n\n文档预览：\n${previewText}`,
+  )
+
+  let gotResult = false
   try {
-    const result = await analyzeRequirement({
-      llm: {
-        baseUrl: settings.settings.llm.baseUrl,
-        apiKey: settings.settings.llm.apiKey,
-        model: settings.settings.llm.model,
-      },
+    await streamAnalyzeRequirement({
+      llm: llmPayload(),
       content: draftText.value,
-      fileName: fileName.value || selectedFile.value?.name || 'requirement.md',
+      fileName: sourceName,
       file: selectedFile.value,
+      handlers: {
+        signal: generationAbort?.signal,
+        onEvent(type, data) {
+          const payload = (data || {}) as Record<string, unknown>
+          if (type === 'status') {
+            const message = String(payload.message || '')
+            generationStatus.value = message
+            statusText.value = message
+          } else if (type === 'delta') {
+            appendAssistantDelta(String(payload.content || ''))
+            generationStatus.value = '模型正在输出功能点 JSON...'
+            statusText.value = generationStatus.value
+          } else if (type === 'result') {
+            const result = payload as unknown as RequirementAnalysisResult
+            if (!result?.root) return
+            gotResult = true
+            mindMapData.value = result.root
+            title.value = result.title
+            summary.value = result.summary
+            featureCount.value = result.featureCount
+            testCases.value = []
+            testCaseTitle.value = ''
+            testCaseSummary.value = ''
+            mainTab.value = 'map'
+            generationStatus.value = `分析完成：识别到 ${result.featureCount} 个功能点`
+            statusText.value = generationStatus.value
+          } else if (type === 'error') {
+            generationError.value = String(payload.message || '分析失败')
+            errorText.value = generationError.value
+          }
+        },
+      },
     })
-    mindMapData.value = result.root
-    title.value = result.title
-    summary.value = result.summary
-    featureCount.value = result.featureCount
-    testCases.value = []
-    testCaseTitle.value = ''
-    testCaseSummary.value = ''
-    mainTab.value = 'map'
-    statusText.value = `分析完成：识别到 ${result.featureCount} 个功能点`
-    await nextFrame()
-    mindMapRef.value?.fit()
+
+    finishAssistant()
+    if (gotResult) {
+      showGenerationPanel.value = false
+      await nextTick()
+      await nextFrame()
+      mindMapRef.value?.fit()
+    } else if (!generationError.value) {
+      generationError.value = '未收到有效的功能点结果'
+      errorText.value = generationError.value
+    }
   } catch (error) {
-    errorText.value = error instanceof Error ? error.message : String(error)
-    statusText.value = ''
+    if ((error as Error)?.name === 'AbortError') {
+      generationStatus.value = '已取消生成'
+      statusText.value = '已取消生成'
+      finishAssistant('已取消生成。')
+    } else {
+      generationError.value = error instanceof Error ? error.message : String(error)
+      errorText.value = generationError.value
+      statusText.value = ''
+      finishAssistant()
+    }
   } finally {
+    generationRunning.value = false
     analyzing.value = false
+    generationAbort = null
   }
 }
 
 async function runGenerateTestCases() {
   if (!canGenerateCases.value || !mindMapData.value) return
   generatingCases.value = true
-  errorText.value = ''
-  statusText.value = `AI 正在根据 ${featureList.value.length} 个功能点生成测试用例...`
   mainTab.value = 'cases'
+
+  const rootSnapshot = mindMapRef.value?.exportData() || mindMapData.value
+  const featuresSnapshot = featureList.value.slice()
+  const count = featuresSnapshot.length
+
+  beginGeneration(
+    'cases',
+    `请根据当前 ${count} 个功能点生成可执行测试用例，输出 JSON。\n\n功能点摘要：\n${featuresSnapshot
+      .slice(0, 12)
+      .map((item, index) => `${index + 1}. ${item.path}`)
+      .join('\n')}${count > 12 ? `\n... 另有 ${count - 12} 个功能点` : ''}`,
+  )
+
+  let gotResult = false
   try {
-    const result = await generateTestCases({
-      llm: {
-        baseUrl: settings.settings.llm.baseUrl,
-        apiKey: settings.settings.llm.apiKey,
-        model: settings.settings.llm.model,
-      },
+    await streamGenerateTestCases({
+      llm: llmPayload(),
       title: title.value,
       summary: summary.value,
-      root: mindMapRef.value?.exportData() || mindMapData.value,
-      features: featureList.value,
+      root: rootSnapshot,
+      features: featuresSnapshot,
+      handlers: {
+        signal: generationAbort?.signal,
+        onEvent(type, data) {
+          const payload = (data || {}) as Record<string, unknown>
+          if (type === 'status') {
+            const message = String(payload.message || '')
+            generationStatus.value = message
+            statusText.value = message
+          } else if (type === 'delta') {
+            appendAssistantDelta(String(payload.content || ''))
+            generationStatus.value = '模型正在输出测试用例 JSON...'
+            statusText.value = generationStatus.value
+          } else if (type === 'result') {
+            const result = payload as unknown as GenerateTestCasesResult
+            if (!result?.cases) return
+            gotResult = true
+            testCases.value = result.cases
+            testCaseTitle.value = result.title
+            testCaseSummary.value = result.summary
+            mainTab.value = 'cases'
+            generationStatus.value = `已生成 ${result.caseCount} 条测试用例，可继续编辑后导出`
+            statusText.value = generationStatus.value
+          } else if (type === 'error') {
+            generationError.value = String(payload.message || '生成失败')
+            errorText.value = generationError.value
+          }
+        },
+      },
     })
-    testCases.value = result.cases
-    testCaseTitle.value = result.title
-    testCaseSummary.value = result.summary
-    statusText.value = `已生成 ${result.caseCount} 条测试用例，可继续编辑后导出`
+
+    finishAssistant()
+    if (gotResult) {
+      showGenerationPanel.value = false
+    } else if (!generationError.value) {
+      generationError.value = '未收到有效的测试用例结果'
+      errorText.value = generationError.value
+    }
   } catch (error) {
-    errorText.value = error instanceof Error ? error.message : String(error)
-    statusText.value = ''
+    if ((error as Error)?.name === 'AbortError') {
+      generationStatus.value = '已取消生成'
+      statusText.value = '已取消生成'
+      finishAssistant('已取消生成。')
+    } else {
+      generationError.value = error instanceof Error ? error.message : String(error)
+      errorText.value = generationError.value
+      statusText.value = ''
+      finishAssistant()
+    }
   } finally {
+    generationRunning.value = false
     generatingCases.value = false
+    generationAbort = null
   }
 }
 
@@ -485,16 +697,21 @@ function addFeature() {
               <input v-model="settings.settings.llm.apiKey" type="password" placeholder="sk-..." />
             </label>
           </div>
-          <button type="button" class="primary" :disabled="!canAnalyze || extracting" @click="runAnalyze">
-            {{ analyzing ? '分析中...' : extracting ? '解析文档中...' : 'AI 分析功能点' }}
+          <button
+            type="button"
+            class="primary"
+            :disabled="(!canAnalyze && !analyzing) || extracting || generatingCases"
+            @click="analyzing ? stopGeneration(true) : runAnalyze()"
+          >
+            {{ analyzing ? '取消分析' : extracting ? '解析文档中...' : 'AI 分析功能点' }}
           </button>
           <button
             type="button"
             class="secondary"
-            :disabled="!canGenerateCases"
-            @click="runGenerateTestCases"
+            :disabled="(!canGenerateCases && !generatingCases) || analyzing"
+            @click="generatingCases ? stopGeneration(true) : runGenerateTestCases()"
           >
-            {{ generatingCases ? '生成用例中...' : '生成测试用例' }}
+            {{ generatingCases ? '取消生成' : '生成测试用例' }}
           </button>
           <p v-if="!canAnalyze && !analyzing" class="hint">请配置 LLM，并上传/粘贴需求内容。</p>
           <p v-else-if="featureList.length && !canGenerateCases && !generatingCases" class="hint">
@@ -574,10 +791,10 @@ function addFeature() {
               <button
                 type="button"
                 class="ghost"
-                :disabled="!canGenerateCases"
-                @click="runGenerateTestCases"
+                :disabled="(!canGenerateCases && !generatingCases) || analyzing"
+                @click="generatingCases ? stopGeneration(true) : runGenerateTestCases()"
               >
-                {{ generatingCases ? '生成中...' : '生成测试用例' }}
+                {{ generatingCases ? '取消生成' : '生成测试用例' }}
               </button>
               <button type="button" class="ghost" :disabled="!testCases.length" @click="exportTestCases('md')">
                 导出 MD
@@ -589,39 +806,53 @@ function addFeature() {
           </div>
         </div>
 
-        <div v-if="statusText || errorText" class="status" :class="{ error: !!errorText }">
+        <div v-if="(statusText || errorText) && !showGenerationPanel" class="status" :class="{ error: !!errorText }">
           {{ errorText || statusText }}
         </div>
 
-        <FeatureMindMap
-          v-show="mainTab === 'map'"
-          ref="mindMapRef"
-          :model-value="mindMapData"
-          :readonly="readonlyMap"
-          @update:model-value="onMindMapUpdate"
+        <GenerationStreamPanel
+          v-if="showGenerationPanel"
+          :title="generationPanelTitle"
+          :subtitle="generationPanelSubtitle"
+          :messages="generationMessages"
+          :running="generationRunning"
+          :status-text="generationStatus"
+          :error-text="generationError"
+          @stop="stopGeneration(true)"
+          @dismiss="dismissGenerationPanel"
         />
 
-        <TestCasePanel
-          v-show="mainTab === 'cases'"
-          v-model="testCases"
-          :title="testCaseTitle"
-          :summary="testCaseSummary"
-          :generating="generatingCases"
-          @update:title="testCaseTitle = $event"
-          @update:summary="testCaseSummary = $event"
-        />
+        <template v-else>
+          <FeatureMindMap
+            v-show="mainTab === 'map'"
+            ref="mindMapRef"
+            :model-value="mindMapData"
+            :readonly="readonlyMap"
+            @update:model-value="onMindMapUpdate"
+          />
 
-        <div v-if="mainTab === 'map'" class="tips">
-          <span>逻辑图布局（XMind 风格）</span>
-          <span>双击节点可编辑文字</span>
-          <span>左侧列表可删除功能点</span>
-          <span>可导入/导出 JSON 思维导图</span>
-        </div>
-        <div v-else class="tips">
-          <span>支持编辑标题、步骤、期望结果</span>
-          <span>可新增/删除/排序用例</span>
-          <span>导出 Markdown 或 JSON</span>
-        </div>
+          <TestCasePanel
+            v-show="mainTab === 'cases'"
+            v-model="testCases"
+            :title="testCaseTitle"
+            :summary="testCaseSummary"
+            :generating="generatingCases"
+            @update:title="testCaseTitle = $event"
+            @update:summary="testCaseSummary = $event"
+          />
+
+          <div v-if="mainTab === 'map'" class="tips">
+            <span>逻辑图布局（XMind 风格）</span>
+            <span>双击节点可编辑文字</span>
+            <span>左侧列表可删除功能点</span>
+            <span>可导入/导出 JSON 思维导图</span>
+          </div>
+          <div v-else class="tips">
+            <span>支持编辑标题、步骤、期望结果</span>
+            <span>可新增/删除/排序用例</span>
+            <span>导出 Markdown 或 JSON</span>
+          </div>
+        </template>
       </main>
     </div>
   </div>

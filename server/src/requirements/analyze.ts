@@ -21,6 +21,13 @@ export interface RequirementAnalysisResult {
   featureCount: number
 }
 
+export type RequirementStreamEvent =
+  | { type: 'status'; data: { message: string } }
+  | { type: 'delta'; data: { content: string } }
+  | { type: 'result'; data: RequirementAnalysisResult }
+  | { type: 'error'; data: { message: string } }
+  | { type: 'done'; data: Record<string, never> }
+
 const mindMapNodeSchema: z.ZodType<MindMapNode> = z.lazy(() =>
   z.object({
     data: z.object({
@@ -130,18 +137,8 @@ function buildPrompt(fileName: string, content: string): string {
 ${clipped}`
 }
 
-export async function analyzeRequirementDocument(input: {
-  llm: LlmSettings
-  content: string
-  fileName?: string
-}): Promise<RequirementAnalysisResult> {
-  const { llm, content, fileName = 'requirement.md' } = input
-  if (!llm.apiKey?.trim()) throw new Error('请先配置 API Key')
-  if (!llm.baseUrl?.trim()) throw new Error('请先配置 Base URL')
-  if (!llm.model?.trim()) throw new Error('请先配置模型名称')
-  if (!content.trim()) throw new Error('需求文档内容为空')
-
-  const client = new OpenAI({
+function createClient(llm: LlmSettings) {
+  return new OpenAI({
     apiKey: llm.apiKey,
     baseURL: normalizeBaseUrl(llm.baseUrl),
     defaultHeaders: {
@@ -155,31 +152,41 @@ export async function analyzeRequirementDocument(input: {
       'X-Stainless-Retry-Count': null,
     },
   })
+}
 
-  const completion = await client.chat.completions.create({
-    model: llm.model,
-    temperature: 0.2,
-    messages: [
-      {
-        role: 'system',
-        content:
-          '你是资深产品经理与测试分析师，擅长把需求文档拆解为可测试的功能点树。始终只输出合法 JSON。',
-      },
-      {
-        role: 'user',
-        content: buildPrompt(fileName, content),
-      },
-    ],
-  })
 
-  const raw = completion.choices[0]?.message?.content || ''
+function createAbortError(message = '已取消生成') {
+  const error = new Error(message)
+  error.name = 'AbortError'
+  return error
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal) {
+  if (signal?.aborted) return true
+  if (!error || typeof error !== 'object') return false
+  const name = String((error as { name?: string }).name || '')
+  const message = String((error as { message?: string }).message || '')
+  return (
+    name === 'AbortError' ||
+    name === 'APIUserAbortError' ||
+    /aborted|abort|cancel/i.test(message)
+  )
+}
+
+function assertLlmReady(llm: LlmSettings, content: string) {
+  if (!llm.apiKey?.trim()) throw new Error('请先配置 API Key')
+  if (!llm.baseUrl?.trim()) throw new Error('请先配置 Base URL')
+  if (!llm.model?.trim()) throw new Error('请先配置模型名称')
+  if (!content.trim()) throw new Error('需求文档内容为空')
+}
+
+function parseAnalysisResult(raw: string, fileName: string, content: string): RequirementAnalysisResult {
   if (!raw.trim()) throw new Error('模型未返回分析结果')
 
   let parsed: unknown
   try {
     parsed = JSON.parse(stripCodeFence(raw))
   } catch {
-    // Some models wrap extra prose; try to recover the first JSON object.
     const match = raw.match(/\{[\s\S]*\}/)
     if (!match) {
       const title = fileName.replace(/\.[^.]+$/, '') || '需求功能点'
@@ -212,5 +219,75 @@ export async function analyzeRequirementDocument(input: {
     summary: validated.data.summary.trim(),
     root,
     featureCount: countFeatures(root),
+  }
+}
+
+export async function analyzeRequirementDocument(input: {
+  llm: LlmSettings
+  content: string
+  fileName?: string
+}): Promise<RequirementAnalysisResult> {
+  return streamAnalyzeRequirementDocument({
+    ...input,
+    onEvent: () => undefined,
+  })
+}
+
+export async function streamAnalyzeRequirementDocument(input: {
+  llm: LlmSettings
+  content: string
+  fileName?: string
+  signal?: AbortSignal
+  onEvent?: (event: RequirementStreamEvent) => void
+}): Promise<RequirementAnalysisResult> {
+  const { llm, content, fileName = 'requirement.md', signal, onEvent } = input
+  const emit = onEvent || (() => undefined)
+
+  assertLlmReady(llm, content)
+  if (signal?.aborted) throw createAbortError()
+
+  const client = createClient(llm)
+  emit({ type: 'status', data: { message: '正在调用模型分析需求功能点...' } })
+
+  try {
+    const stream = await client.chat.completions.create(
+      {
+        model: llm.model,
+        temperature: 0.2,
+        stream: true,
+        messages: [
+          {
+            role: 'system',
+            content:
+              '你是资深产品经理与测试分析师，擅长把需求文档拆解为可测试的功能点树。始终只输出合法 JSON。',
+          },
+          {
+            role: 'user',
+            content: buildPrompt(fileName, content),
+          },
+        ],
+      },
+      { signal },
+    )
+
+    let raw = ''
+    for await (const chunk of stream) {
+      if (signal?.aborted) throw createAbortError()
+      const delta = chunk.choices?.[0]?.delta?.content
+      if (!delta) continue
+      raw += delta
+      emit({ type: 'delta', data: { content: delta } })
+    }
+
+    if (signal?.aborted) throw createAbortError()
+
+    emit({ type: 'status', data: { message: '模型输出完成，正在解析功能点结构...' } })
+    const result = parseAnalysisResult(raw, fileName, content)
+    emit({ type: 'result', data: result })
+    emit({ type: 'done', data: {} })
+    return result
+  } catch (error) {
+    if (isAbortError(error, signal)) throw createAbortError()
+    throw error
   }
 }
