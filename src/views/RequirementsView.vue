@@ -11,6 +11,7 @@ const settings = useSettingsStore()
 const serverHasKey = ref(false)
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const jsonInputRef = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const draftText = ref('')
 const fileName = ref('')
@@ -166,6 +167,83 @@ function downloadJson() {
   URL.revokeObjectURL(url)
 }
 
+function onPickJson() {
+  jsonInputRef.value?.click()
+}
+
+function isMindMapNode(value: unknown): value is MindMapNode {
+  if (!value || typeof value !== 'object') return false
+  const node = value as MindMapNode
+  if (!node.data || typeof node.data !== 'object') return false
+  if (typeof node.data.text !== 'string') return false
+  if (node.children !== undefined && !Array.isArray(node.children)) return false
+  return (node.children || []).every((child) => isMindMapNode(child))
+}
+
+function normalizeImportedPayload(raw: unknown): {
+  title: string
+  summary: string
+  root: MindMapNode
+} {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('JSON 内容无效：需要对象结构')
+  }
+
+  const payload = raw as Record<string, unknown>
+  let candidate: unknown = null
+
+  if (isMindMapNode(payload.root)) {
+    candidate = payload.root
+  } else if (isMindMapNode(payload)) {
+    // Support raw simple-mind-map node JSON: { data, children }
+    candidate = payload
+  } else if (isMindMapNode(payload.data)) {
+    candidate = payload.data
+  }
+
+  if (!isMindMapNode(candidate)) {
+    throw new Error('JSON 格式不正确：未找到有效的思维导图节点（需要 root 或 { data, children }）')
+  }
+
+  return {
+    title: typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim() : candidate.data.text || '导入的需求功能点',
+    summary: typeof payload.summary === 'string' ? payload.summary : '从 JSON 导入的思维导图',
+    root: candidate,
+  }
+}
+
+async function onJsonFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] || null
+  errorText.value = ''
+  statusText.value = ''
+  if (!file) return
+
+  try {
+    const textContent = await file.text()
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(textContent)
+    } catch {
+      throw new Error('无法解析 JSON 文件，请确认文件内容合法')
+    }
+
+    const imported = normalizeImportedPayload(parsed)
+    mindMapData.value = imported.root
+    title.value = imported.title
+    summary.value = imported.summary
+    featureCount.value = Math.max(0, flattenFeatures(imported.root).length)
+    fileName.value = file.name
+    statusText.value = `已导入 JSON 思维导图：${file.name}（${featureCount.value} 个功能点）`
+    await nextFrame()
+    mindMapRef.value?.fit()
+  } catch (error) {
+    errorText.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    input.value = ''
+  }
+}
+
 function updateFeatureText(index: number, text: string) {
   if (!mindMapData.value) return
   const cloned = structuredClone(mindMapData.value)
@@ -198,6 +276,14 @@ function walk(node: MindMapNode, acc: MindMapNode[], isRoot = true) {
           {{ readonlyMap ? '启用编辑' : '只读预览' }}
         </button>
         <button type="button" class="ghost" :disabled="!mindMapData" @click="mindMapRef?.fit()">适应画布</button>
+        <button type="button" class="ghost" @click="onPickJson">导入 JSON</button>
+        <input
+          ref="jsonInputRef"
+          class="hidden"
+          type="file"
+          accept=".json,application/json"
+          @change="onJsonFileChange"
+        />
         <button type="button" class="ghost" :disabled="!mindMapData" @click="downloadJson">导出 JSON</button>
         <button type="button" class="ghost" @click="clearAll">清空</button>
       </div>
@@ -307,6 +393,7 @@ function walk(node: MindMapNode, acc: MindMapNode[], isRoot = true) {
           <span>逻辑图布局（XMind 风格）</span>
           <span>双击节点可编辑文字</span>
           <span>支持拖拽、缩放、增删节点</span>
+          <span>可导入/导出 JSON 思维导图</span>
         </div>
       </main>
     </div>
