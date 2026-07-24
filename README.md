@@ -1,6 +1,6 @@
 # Browser Automated Testing
 
-AI 驱动的前端自动化检测工具：输入目标 URL + 测试提示词，Agent 会像测试人员一样控制浏览器检查布局、交互、接口和控制台问题，并以 **GPT 风格流式对话**反馈过程与结论。
+AI 驱动的前端自动化检测工具：输入目标 URL + 测试提示词，Agent 会像测试人员一样控制浏览器检查布局、交互、接口和控制台问题，并以 **GPT 风格流式对话**反馈过程；最终输出 **完整 Markdown 测试报告**，可一键保存为 `.md` 文档。
 
 > 说明：Codex 桌面端的 `control-chrome` 依赖私有 browser runtime / Chrome 扩展。本项目把同一测试思路产品化，使用 **Playwright + OpenAI 兼容接口** 独立运行。`skills/control-chrome` 会作为系统提示注入 Agent。
 
@@ -13,6 +13,7 @@ AI 驱动的前端自动化检测工具：输入目标 URL + 测试提示词，A
   - **推荐**：新开浏览器 + “等待手动登录”（无需配置 Chrome/Edge/360）
   - **可选**：自动扫描本机远程调试端口，附着已打开标签（保留登录态）
 - 自动采集网络请求与控制台日志
+- 最终输出完整 Markdown 测试报告；界面可 **保存最后一次 AI 的 MD 文档**
 - Skills 可扩展（`skills/*/SKILL.md`）
 
 ## 快速开始
@@ -28,8 +29,10 @@ cp .env.example .env
 npm run dev
 ```
 
-- 前端：http://127.0.0.1:5173
+- 前端：http://127.0.0.1:5199
 - Agent 服务：http://127.0.0.1:8787
+
+> 需要 Node.js `^22.18.0` 或 `>=24.12.0`。
 
 ## 使用方式
 
@@ -38,14 +41,17 @@ npm run dev
 3. 若页面需要登录，二选一：
    - 勾选 **等待手动登录**：开始后在弹出浏览器里登录，系统检测到业务页后自动继续
    - 或用远程调试方式启动浏览器并打开已登录页面，点“重新扫描”附着该标签（Chrome/Edge/360 等 Chromium 内核通用，无需按品牌配置）
-4. 输入测试需求，例如：
+4. 输入测试需求，并明确要求输出 Markdown 报告，例如：
 
 ```text
-像测试人员一样检查当前页面：布局、可用性、接口错误、控制台报错，并输出分级问题报告。
+像测试人员一样检查当前页面：布局、可用性、接口错误、控制台报错，最后请输出完整 Markdown 测试报告。
 ```
 
 5. 观察流式输出与工具轨迹（snapshot / network / screenshot 等）
-6. 查看最终问题报告
+6. 测试结束后点击 **保存本次测试结果**：
+   - 仅保存 **最后一次 AI 完整回复** 作为 Markdown 文档
+   - 支持的浏览器可弹出选目录对话框；否则回退为浏览器默认下载
+   - 默认文件名形如 `browser-test-report-YYYYMMDD-HHmm.md`
 
 ## 架构
 
@@ -59,11 +65,14 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 
 ### 主要目录
 
-- `src/` 前端对话与设置界面
+- `src/` 前端对话、设置与报告保存
+- `src/utils/report.ts` 提取最后一次 AI Markdown 并保存本地
 - `server/src/agent` LLM 工具循环与流式事件
 - `server/src/browser` Playwright 会话与工具
-- `server/src/skills` Skill 加载器
+- `server/src/skills` Skill 加载器（注入“输出完整 MD 报告”约束）
+- `server/src/routes` REST / SSE API
 - `skills/control-chrome/SKILL.md` 测试行为准则
+- `server/data/screenshots/` 截图静态资源目录
 
 ## API
 
@@ -71,7 +80,7 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 
 ```json
 {
-  "messages": [{ "role": "user", "content": "检查首页布局和接口" }],
+  "messages": [{ "role": "user", "content": "检查首页布局和接口，最后输出完整 Markdown 测试报告" }],
   "llm": {
     "baseUrl": "https://your-gateway.com/v1",
     "apiKey": "sk-xxx",
@@ -96,9 +105,21 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 
 返回已加载 skill 列表。
 
+### `GET /api/defaults`
+
+返回服务端默认 LLM / session 配置（供前端预填）。
+
+### `GET /api/browser/tabs`
+
+扫描本机可附着的 Chromium 远程调试标签，用于侧边栏“重新扫描”。
+
 ### `GET /api/health`
 
 健康检查。
+
+### `GET /screenshots/*`
+
+访问本次测试产生的截图静态文件。
 
 ## 环境变量
 
@@ -110,6 +131,21 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 | `LLM_MODEL` | 默认模型 |
 | `MAX_AGENT_STEPS` | 默认最大工具循环步数（`0` = 无限） |
 
+## 测试报告
+
+Agent 系统提示会要求最终输出 **完整、可直接保存的 Markdown 文档**，建议包含：
+
+- 测试目标
+- 覆盖范围
+- 问题列表（级别 / 现象 / 证据 / 建议）
+- 结论与风险
+
+前端 **保存本次测试结果** 的规则：
+
+1. 只取会话中 **最后一次非流式 AI 回复** 的正文
+2. 不拼接多轮过程、不额外包装工具轨迹
+3. 因此请在用户输入中明确要求：“输出完整 Markdown 测试报告”
+
 ## 与 Codex control-chrome 的关系
 
 | 能力 | Codex Desktop | 本项目 |
@@ -119,6 +155,7 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 | 自定义中转站 LLM | 取决于 Codex 配置 | ✅ 页面可配 |
 | 流式对话 UI | Codex 内置 | ✅ 自研 |
 | Skill 驱动测试策略 | ✅ | ✅ `skills/` |
+| 导出 Markdown 报告 | 视会话能力 | ✅ 一键保存最后一次 AI MD |
 
 ## 登录态说明
 
@@ -150,9 +187,22 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 
 > 说明：Firefox 不走 CDP，当前不支持直接附着；请用方案 A 手动登录。
 
+## 常用脚本
+
+| 命令 | 说明 |
+| --- | --- |
+| `npm run dev` | 同时启动前端 + Agent |
+| `npm run dev:web` | 仅 Vite 前端 |
+| `npm run dev:server` | 仅 Agent 服务（热重载） |
+| `npm run server` | 仅 Agent 服务 |
+| `npm run build` | 类型检查 + 前端构建 |
+| `npm run test:unit` | 单元测试 |
+| `npm run lint` / `npm run format` | 代码检查与格式化 |
+
 ## 后续可增强
 
 - 浏览器扩展一键附着日常窗口（无需 remote debugging）
 - 多页用例编排与回归报告导出
 - 视觉回归（截图 diff）
 - 录制操作轨迹回放
+- 报告模板自定义与多轮结果归档
