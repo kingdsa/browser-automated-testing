@@ -80,7 +80,7 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
   "session": {
     "targetUrl": "https://example.com",
     "headless": false,
-    "maxSteps": 16,
+    "maxSteps": 0,
     "browserMode": "auto",
     "waitForLogin": true,
     "loginWaitSeconds": 180,
@@ -108,7 +108,7 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 | `LLM_BASE_URL` | 默认中转站地址 |
 | `LLM_API_KEY` | 默认 API Key |
 | `LLM_MODEL` | 默认模型 |
-| `MAX_AGENT_STEPS` | 默认最大工具循环步数 |
+| `MAX_AGENT_STEPS` | 默认最大工具循环步数（`0` = 无限） |
 
 ## 与 Codex control-chrome 的关系
 

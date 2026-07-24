@@ -56,29 +56,40 @@ function screenshotSrc(tool: NonNullable<ChatMessageItem['tools']>[number]) {
       />
 
       <div v-if="message.tools?.length" class="tools">
-        <details
-          v-for="(tool, index) in message.tools"
-          :key="`${message.id}_${tool.id || tool.name}_${index}`"
-          class="tool"
-          :class="tool.status"
-          :open="tool.status === 'running'"
-        >
-          <summary>
-            <span class="tool-name">{{ tool.name }}</span>
-            <span class="tool-status">{{
-              tool.status === 'running' ? '执行中' : tool.ok === false ? '失败' : '完成'
-            }}</span>
-          </summary>
-          <p v-if="tool.summary" class="tool-summary">{{ tool.summary }}</p>
-          <pre v-if="tool.arguments" class="code">{{ tool.arguments }}</pre>
-          <pre v-if="tool.data" class="code">{{ JSON.stringify(tool.data, null, 2) }}</pre>
-          <img
-            v-if="screenshotSrc(tool)"
-            class="shot"
-            :src="screenshotSrc(tool)"
-            alt="screenshot"
-          />
-        </details>
+        <div class="tools-head">
+          <span class="tools-title">工具调用</span>
+          <span class="tools-count">{{ message.tools.length }}</span>
+        </div>
+        <div class="tools-list">
+          <details
+            v-for="(tool, index) in message.tools"
+            :key="`${message.id}_${tool.id || tool.name}_${index}`"
+            class="tool"
+            :class="tool.status"
+            :open="tool.status === 'running'"
+          >
+            <summary>
+              <span class="tool-index">{{ index + 1 }}</span>
+              <span class="tool-main">
+                <span class="tool-name">{{ tool.name }}</span>
+                <span v-if="tool.summary" class="tool-summary-inline">{{ tool.summary }}</span>
+              </span>
+              <span class="tool-status" :class="tool.status">{{
+                tool.status === 'running' ? '执行中' : tool.ok === false ? '失败' : '完成'
+              }}</span>
+            </summary>
+            <div class="tool-body">
+              <pre v-if="tool.arguments" class="code">{{ tool.arguments }}</pre>
+              <pre v-if="tool.data" class="code">{{ JSON.stringify(tool.data, null, 2) }}</pre>
+              <img
+                v-if="screenshotSrc(tool)"
+                class="shot"
+                :src="screenshotSrc(tool)"
+                alt="screenshot"
+              />
+            </div>
+          </details>
+        </div>
       </div>
     </article>
   </div>
@@ -280,65 +291,168 @@ function screenshotSrc(tool: NonNullable<ChatMessageItem['tools']>[number]) {
 }
 
 .tools {
-  margin-top: 12px;
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-soft) 88%, transparent);
+  overflow: hidden;
+}
+
+.tools-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-soft) 70%, #fff 8%);
+}
+
+.tools-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tools-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.tools-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  max-height: min(42vh, 360px);
+  overflow: auto;
 }
 
 .tool {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--panel-soft);
-  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.tool:last-child {
+  border-bottom: 0;
 }
 
 .tool.running {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 .tool.error {
-  border-color: #fecdca;
+  background: color-mix(in srgb, #fecdca 28%, transparent);
 }
 
 summary {
   cursor: pointer;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-index {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.tool-main {
+  min-width: 0;
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 13px;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .tool-name {
+  flex: 0 0 auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tool-summary-inline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .tool-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--muted);
 }
 
-.tool-summary {
-  margin: 8px 0;
-  color: var(--text);
-  font-size: 13px;
+.tool-status.running {
+  color: var(--accent);
+}
+
+.tool-status.error,
+.tool.error .tool-status {
+  color: #d92d20;
+}
+
+.tool-body {
+  padding: 0 10px 8px 36px;
 }
 
 .code {
-  margin: 8px 0 0;
-  padding: 10px;
-  border-radius: 10px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
   background: #0f172a;
   color: #e2e8f0;
   overflow: auto;
-  font-size: 12px;
-  line-height: 1.5;
+  max-height: 180px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.code:last-child {
+  margin-bottom: 0;
 }
 
 .shot {
   display: block;
-  margin-top: 10px;
+  margin-top: 2px;
   max-width: 100%;
-  border-radius: 10px;
+  max-height: 220px;
+  object-fit: contain;
+  border-radius: 8px;
   border: 1px solid var(--border);
+  background: #0f172a;
 }
 </style>

@@ -14,7 +14,7 @@ const defaultSettings: AppSettings = {
   session: {
     targetUrl: '',
     headless: false,
-    maxSteps: 16,
+    maxSteps: 0,
     browserMode: 'auto',
     cdpEndpoint: '',
     attachUrlIncludes: '',
@@ -68,7 +68,7 @@ export const useSettingsStore = defineStore('settings', () => {
         const raw = localStorage.getItem(STORAGE_KEY)
         if (!raw) settings.value.llm.model = defaults.llm.model
       }
-      if (!rawHasSessionMax() && defaults.session.maxSteps) {
+      if (!rawHasSessionMax() && typeof defaults.session.maxSteps === 'number') {
         settings.value.session.maxSteps = defaults.session.maxSteps
       }
     } catch {
@@ -81,7 +81,7 @@ export const useSettingsStore = defineStore('settings', () => {
       const raw = localStorage.getItem(STORAGE_KEY)
       if (!raw) return false
       const parsed = JSON.parse(raw)
-      return Boolean(parsed?.session?.maxSteps)
+      return typeof parsed?.session?.maxSteps === 'number'
     } catch {
       return false
     }

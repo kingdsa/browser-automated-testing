@@ -67,6 +67,7 @@ export class BrowserSession {
   private networkLogs: NetworkLogItem[] = []
   private consoleLogs: ConsoleLogItem[] = []
   private requestMap = new Map<Request, string>()
+  private listenedPages = new WeakSet<Page>()
   private seq = 0
   private headless: boolean
   private mode: BrowserMode
@@ -294,34 +295,86 @@ export class BrowserSession {
     timeoutMs?: number
     onProgress?: (message: string) => void
   }): Promise<ToolResult> {
-    const page = await this.ensurePage()
+    await this.ensurePage()
     const timeoutMs = options?.timeoutMs ?? this.loginWaitSeconds * 1000
     const started = Date.now()
+    let lastProgressAt = 0
+    let sawLoginPage = false
     options?.onProgress?.(
       `请在浏览器窗口中完成登录（最多 ${Math.round(timeoutMs / 1000)}s）。登录成功并看到业务内容后会自动继续。`,
     )
 
     while (Date.now() - started < timeoutMs) {
+      // Prefer the tab that currently looks like a real app page if multiple exist.
+      await this.preferLikelyAppPage().catch(() => undefined)
+      const page = await this.ensurePage()
+
       const state = await page
         .evaluate(() => {
           const url = location.href
           const title = document.title || ''
-          const hasPassword = Boolean(document.querySelector('input[type="password"]'))
           const bodyText = (document.body?.innerText || '').replace(/\s+/g, ' ').trim()
-          const loginHints = /login|signin|sign-in|passport|sso|auth|登录|登陆|账号|密码/i
-          const looksLikeLogin =
-            hasPassword || loginHints.test(url) || loginHints.test(title) || loginHints.test(bodyText.slice(0, 300))
+          const passwordInputs = Array.from(
+            document.querySelectorAll<HTMLInputElement>('input[type="password"]'),
+          )
+          const visiblePassword = passwordInputs.some((el) => {
+            const style = window.getComputedStyle(el)
+            const rect = el.getBoundingClientRect()
+            return (
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              style.opacity !== '0' &&
+              rect.width > 0 &&
+              rect.height > 0
+            )
+          })
+          const path = `${location.pathname}${location.hash}`.toLowerCase()
+          const loginPath =
+            /(?:^|[/?#_-])(login|signin|sign-in|sign_in|passport|sso|oauth|auth(?:entication)?|登录|登陆)(?:$|[/?#_-])/i.test(
+              path,
+            ) ||
+            /(?:^|[/?#_-])(login|signin|sign-in|sign_in|passport|sso|oauth|auth(?:entication)?|登录|登陆)(?:$|[/?#_-])/i.test(
+              location.hostname,
+            )
+          const loginTitle = /登录|登陆|sign\s*in|log\s*in|passport|sso/i.test(title)
+          const loggedInMarkers =
+            /退出|登出|注销|log\s*out|sign\s*out|我的|个人中心|工作台|控制台|dashboard|console|profile|account\s*settings/i.test(
+              bodyText.slice(0, 2000),
+            ) || Boolean(document.querySelector('[class*="avatar" i], [class*="user-info" i], img[alt*="avatar" i]'))
+          // Body text alone is too noisy (nav often contains 账号/登录入口). Prefer form + URL/title signals.
+          // Password form is the strongest "still on login" signal.
+          const looksLikeLogin = visiblePassword || ((loginPath || loginTitle) && !loggedInMarkers)
+          const ready =
+            !visiblePassword &&
+            bodyText.length > 40 &&
+            !/about:blank|chrome-error:|data:text\/html/i.test(url) &&
+            (loggedInMarkers || !looksLikeLogin)
+
+          let reason = 'ready'
+          if (visiblePassword) reason = '仍有密码输入框'
+          else if (loginPath) reason = 'URL 仍像登录页'
+          else if (loginTitle) reason = '标题仍像登录页'
+          else if (bodyText.length <= 40) reason = '页面内容过少/可能仍在跳转'
+          else if (/about:blank|chrome-error:|data:text\/html/i.test(url)) reason = '页面尚未进入业务地址'
+
           return {
             url,
             title,
-            hasPassword,
+            hasPassword: visiblePassword,
+            loginPath,
+            loginTitle,
+            loggedInMarkers,
             looksLikeLogin,
+            ready,
+            reason,
             bodyLength: bodyText.length,
           }
         })
         .catch(() => null)
 
-      if (state && !state.looksLikeLogin && state.bodyLength > 40) {
+      if (state?.looksLikeLogin) sawLoginPage = true
+
+      if (state?.ready || (sawLoginPage && state && !state.looksLikeLogin && state.bodyLength > 20)) {
         this.attachedInfo = {
           url: state.url,
           title: state.title,
@@ -337,19 +390,66 @@ export class BrowserSession {
       }
 
       const elapsed = Math.round((Date.now() - started) / 1000)
-      if (elapsed > 0 && elapsed % 10 === 0) {
-        options?.onProgress?.(`仍在等待手动登录… 已等待 ${elapsed}s`)
+      if (elapsed - lastProgressAt >= 8) {
+        lastProgressAt = elapsed
+        const detail = state
+          ? `当前: ${state.title || '(无标题)'} | ${state.url} | ${state.reason || '未知'}`
+          : '当前页面暂时不可读（可能正在跳转）'
+        options?.onProgress?.(`仍在等待手动登录… 已等待 ${elapsed}s。${detail}`)
       }
       await page.waitForTimeout(1500)
     }
 
+    const page = await this.ensurePage()
+    const finalUrl = page.url()
+    const finalTitle = await page.title().catch(() => '')
     return {
       ok: false,
-      summary: `等待手动登录超时（${Math.round(timeoutMs / 1000)}s）。可重试，或先附着已登录标签页。`,
+      summary: `等待手动登录超时（${Math.round(timeoutMs / 1000)}s）。最后页面: ${finalTitle || finalUrl}。可重试，或先附着已登录标签页。`,
       data: {
-        url: page.url(),
-        title: await page.title().catch(() => ''),
+        url: finalUrl,
+        title: finalTitle,
       },
+    }
+  }
+
+  /** If several tabs exist, focus one that no longer looks like a login form. */
+  private async preferLikelyAppPage() {
+    if (!this.context) return
+    const pages = this.context.pages().filter((p) => !p.isClosed())
+    if (pages.length <= 1) return
+
+    let best: { page: Page; score: number } | null = null
+    for (const candidate of pages) {
+      const score = await candidate
+        .evaluate(() => {
+          const url = location.href
+          if (/about:blank|chrome-error:|data:text\/html/i.test(url)) return -100
+          const password = Boolean(
+            Array.from(document.querySelectorAll<HTMLInputElement>('input[type="password"]')).some((el) => {
+              const style = window.getComputedStyle(el)
+              const rect = el.getBoundingClientRect()
+              return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0
+            }),
+          )
+          const path = `${location.pathname}${location.hash}`.toLowerCase()
+          const loginPath = /login|signin|sign-in|passport|sso|oauth|auth|登录|登陆/i.test(path)
+          const bodyLength = (document.body?.innerText || '').replace(/\s+/g, ' ').trim().length
+          let s = Math.min(bodyLength, 500)
+          if (password) s -= 300
+          if (loginPath) s -= 120
+          if (/dashboard|console|home|index|workspace|admin|管理|工作台|首页/i.test(path + document.title)) s += 80
+          return s
+        })
+        .catch(() => -1000)
+
+      if (!best || score > best.score) best = { page: candidate, score }
+    }
+
+    if (best && best.page !== this.page) {
+      this.page = best.page
+      this.attachListeners(best.page)
+      await best.page.bringToFront().catch(() => undefined)
     }
   }
 
@@ -358,6 +458,9 @@ export class BrowserSession {
   }
 
   private attachListeners(page: Page) {
+    if (this.listenedPages.has(page)) return
+    this.listenedPages.add(page)
+
     page.on('request', (request) => {
       const id = `req_${++this.seq}`
       this.requestMap.set(request, id)

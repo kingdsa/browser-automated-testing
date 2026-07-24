@@ -62,7 +62,9 @@ function toOpenAiMessages(messages: ChatMessage[]): OpenAI.Chat.ChatCompletionMe
 export async function runAgent(input: RunAgentInput): Promise<void> {
   const { messages, llm, session: sessionConfig, onEvent, signal } = input
   const sessionId = uuidv4()
-  const maxSteps = sessionConfig?.maxSteps ?? config.defaultMaxSteps
+  const configuredMaxSteps = sessionConfig?.maxSteps ?? config.defaultMaxSteps
+  const unlimited = !configuredMaxSteps || configuredMaxSteps <= 0
+  const maxSteps = unlimited ? Number.POSITIVE_INFINITY : configuredMaxSteps
   const targetUrl = sessionConfig?.targetUrl
 
   onEvent({ type: 'session', data: { sessionId, targetUrl: targetUrl || null } })
@@ -205,13 +207,15 @@ export async function runAgent(input: RunAgentInput): Promise<void> {
       })
     }
 
+    let finishedNaturally = false
     for (let step = 1; step <= maxSteps; step++) {
       if (signal?.aborted) {
         onEvent({ type: 'status', data: { message: '用户已停止本次测试' } })
         break
       }
 
-      onEvent({ type: 'status', data: { message: `Agent 思考中（第 ${step}/${maxSteps} 步）...` } })
+      const stepLabel = unlimited ? `${step}` : `${step}/${configuredMaxSteps}`
+      onEvent({ type: 'status', data: { message: `Agent 思考中（第 ${stepLabel} 步）...` } })
 
       const stream = await client.chat.completions.create({
         model: llm.model,
@@ -264,6 +268,7 @@ export async function runAgent(input: RunAgentInput): Promise<void> {
       })
 
       if (!toolCalls.length) {
+        finishedNaturally = true
         onEvent({ type: 'status', data: { message: '测试完成，已生成结论' } })
         break
       }
@@ -310,6 +315,13 @@ export async function runAgent(input: RunAgentInput): Promise<void> {
           }),
         })
       }
+    }
+
+    if (!finishedNaturally && !signal?.aborted && !unlimited) {
+      onEvent({
+        type: 'status',
+        data: { message: `已达到最大步数 ${configuredMaxSteps}，测试停止` },
+      })
     }
   } catch (error) {
     let message = error instanceof Error ? error.message : String(error)

@@ -158,12 +158,13 @@ onMounted(refreshMeta)
         <span>无头模式（附着/手动登录时自动关闭）</span>
       </label>
       <label>
-        <span>最大 Agent 步数</span>
+        <span>最大 Agent 步数（0 = 无限）</span>
         <input
           v-model.number="settingsStore.settings.session.maxSteps"
           type="number"
-          min="1"
-          max="50"
+          min="0"
+          max="1000"
+          placeholder="0 表示不限制"
         />
       </label>
       <details class="advanced">

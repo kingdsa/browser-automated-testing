@@ -25,7 +25,7 @@ const chatBodySchema = z.object({
     .object({
       targetUrl: z.string().url().optional().or(z.literal('')),
       headless: z.boolean().optional(),
-      maxSteps: z.number().int().min(1).max(50).optional(),
+      maxSteps: z.number().int().min(0).max(1000).optional(),
       browserMode: z.enum(['auto', 'launch', 'attach']).optional(),
       cdpEndpoint: z.string().optional().or(z.literal('')),
       attachUrlIncludes: z.string().optional().or(z.literal('')),

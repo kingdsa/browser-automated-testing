@@ -17,5 +17,5 @@ export const config = {
     apiKey: process.env.LLM_API_KEY || '',
     model: process.env.LLM_MODEL || 'gpt-4o-mini',
   },
-  defaultMaxSteps: Number(process.env.MAX_AGENT_STEPS || 20),
+  defaultMaxSteps: Number(process.env.MAX_AGENT_STEPS || 0),
 }
