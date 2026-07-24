@@ -8,12 +8,39 @@ const props = defineProps<{
 }>()
 
 const scroller = ref<HTMLElement | null>(null)
+const toolsScrollers = new Map<string, HTMLElement>()
+
+function setToolsScroller(messageId: string, el: Element | null) {
+  if (el instanceof HTMLElement) toolsScrollers.set(messageId, el)
+  else toolsScrollers.delete(messageId)
+}
+
+function scrollToolsToLatest(messageId?: string) {
+  if (messageId) {
+    const el = toolsScrollers.get(messageId)
+    if (el) el.scrollTop = el.scrollHeight
+    return
+  }
+
+  for (const el of toolsScrollers.values()) {
+    el.scrollTop = el.scrollHeight
+  }
+}
 
 watch(
-  () => props.messages.map((m) => `${m.id}:${m.content.length}:${m.tools?.length || 0}`).join('|'),
+  () =>
+    props.messages
+      .map((m) => {
+        const tools = (m.tools || [])
+          .map((t) => `${t.id || ''}:${t.name}:${t.status}:${t.summary || ''}:${t.arguments?.length || 0}`)
+          .join(',')
+        return `${m.id}:${m.content.length}:${tools}`
+      })
+      .join('|'),
   async () => {
     await nextTick()
     if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight
+    scrollToolsToLatest()
   },
 )
 
@@ -60,13 +87,13 @@ function screenshotSrc(tool: NonNullable<ChatMessageItem['tools']>[number]) {
           <span class="tools-title">工具调用</span>
           <span class="tools-count">{{ message.tools.length }}</span>
         </div>
-        <div class="tools-list">
+        <div class="tools-list" :ref="(el) => setToolsScroller(message.id, el as Element | null)">
           <details
             v-for="(tool, index) in message.tools"
             :key="`${message.id}_${tool.id || tool.name}_${index}`"
             class="tool"
             :class="tool.status"
-            :open="tool.status === 'running'"
+            :open="tool.status === 'running' || index === message.tools.length - 1"
           >
             <summary>
               <span class="tool-index">{{ index + 1 }}</span>
