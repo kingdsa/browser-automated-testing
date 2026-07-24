@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, watch, ref } from 'vue'
+import { nextTick, onBeforeUnmount, watch, ref } from 'vue'
 import type { ChatMessageItem } from '@/types/chat'
 import { renderMarkdown } from '@/utils/markdown'
 
@@ -9,22 +9,84 @@ const props = defineProps<{
 
 const scroller = ref<HTMLElement | null>(null)
 const toolsScrollers = new Map<string, HTMLElement>()
+const toolsObservers = new Map<string, ResizeObserver>()
 
-function setToolsScroller(messageId: string, el: Element | null) {
-  if (el instanceof HTMLElement) toolsScrollers.set(messageId, el)
-  else toolsScrollers.delete(messageId)
+function disconnectToolsObserver(messageId: string) {
+  const observer = toolsObservers.get(messageId)
+  if (observer) {
+    observer.disconnect()
+    toolsObservers.delete(messageId)
+  }
 }
 
-function scrollToolsToLatest(messageId?: string) {
-  if (messageId) {
-    const el = toolsScrollers.get(messageId)
-    if (el) el.scrollTop = el.scrollHeight
+function observeToolsList(messageId: string, el: HTMLElement) {
+  disconnectToolsObserver(messageId)
+  const observer = new ResizeObserver(() => {
+    scrollToolsListToLatest(el)
+    if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight
+  })
+  observer.observe(el)
+  const last = el.lastElementChild
+  if (last instanceof HTMLElement) observer.observe(last)
+  toolsObservers.set(messageId, observer)
+}
+
+function setToolsScroller(messageId: string, el: Element | null) {
+  if (el instanceof HTMLElement) {
+    toolsScrollers.set(messageId, el)
+    observeToolsList(messageId, el)
+    return
+  }
+  toolsScrollers.delete(messageId)
+  disconnectToolsObserver(messageId)
+}
+
+function scrollToolsListToLatest(el: HTMLElement) {
+  const last = el.lastElementChild as HTMLElement | null
+  if (!last) {
+    el.scrollTop = el.scrollHeight
     return
   }
 
-  for (const el of toolsScrollers.values()) {
-    el.scrollTop = el.scrollHeight
+  // Use viewport math so nested <details> layout does not under-scroll.
+  const pad = 16
+  const elRect = el.getBoundingClientRect()
+  const lastRect = last.getBoundingClientRect()
+  const overflowBottom = lastRect.bottom - elRect.bottom
+  const overflowTop = elRect.top - lastRect.top
+
+  if (overflowBottom > -pad) {
+    el.scrollTop += overflowBottom + pad
+  } else if (overflowTop > 0) {
+    el.scrollTop -= overflowTop + pad
   }
+
+  // Final hard snap — some browsers report stale rects mid-layout.
+  const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight)
+  if (el.scrollTop < maxScroll) {
+    el.scrollTop = maxScroll
+  }
+}
+
+function scrollAllToolsToLatest() {
+  for (const el of toolsScrollers.values()) {
+    scrollToolsListToLatest(el)
+  }
+}
+
+function scheduleScrollToLatest() {
+  const run = () => {
+    scrollAllToolsToLatest()
+    if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight
+  }
+
+  run()
+  requestAnimationFrame(() => {
+    run()
+    requestAnimationFrame(run)
+  })
+  window.setTimeout(run, 40)
+  window.setTimeout(run, 140)
 }
 
 watch(
@@ -32,17 +94,30 @@ watch(
     props.messages
       .map((m) => {
         const tools = (m.tools || [])
-          .map((t) => `${t.id || ''}:${t.name}:${t.status}:${t.summary || ''}:${t.arguments?.length || 0}`)
+          .map(
+            (t) =>
+              `${t.id || ''}:${t.name}:${t.status}:${t.summary || ''}:${t.arguments?.length || 0}:${t.screenshotBase64 ? 1 : 0}:${t.screenshotPath || ''}`,
+          )
           .join(',')
         return `${m.id}:${m.content.length}:${tools}`
       })
       .join('|'),
   async () => {
     await nextTick()
-    if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight
-    scrollToolsToLatest()
+    // Re-bind observers to the newest last child after list updates.
+    for (const [messageId, el] of toolsScrollers.entries()) {
+      observeToolsList(messageId, el)
+    }
+    scheduleScrollToLatest()
   },
 )
+
+onBeforeUnmount(() => {
+  for (const messageId of [...toolsObservers.keys()]) {
+    disconnectToolsObserver(messageId)
+  }
+  toolsScrollers.clear()
+})
 
 function screenshotSrc(tool: NonNullable<ChatMessageItem['tools']>[number]) {
   if (tool.screenshotBase64) return `data:image/png;base64,${tool.screenshotBase64}`
@@ -322,7 +397,7 @@ function screenshotSrc(tool: NonNullable<ChatMessageItem['tools']>[number]) {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: color-mix(in srgb, var(--panel-soft) 88%, transparent);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .tools-head {
@@ -360,8 +435,13 @@ function screenshotSrc(tool: NonNullable<ChatMessageItem['tools']>[number]) {
 .tools-list {
   display: flex;
   flex-direction: column;
-  max-height: min(42vh, 360px);
+  max-height: min(48vh, 420px);
   overflow: auto;
+  padding: 0 0 20px;
+  scroll-padding-bottom: 20px;
+  scrollbar-gutter: stable;
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 12px;
 }
 
 .tool {
@@ -370,10 +450,12 @@ function screenshotSrc(tool: NonNullable<ChatMessageItem['tools']>[number]) {
   border-radius: 0;
   background: transparent;
   padding: 0;
+  scroll-margin-bottom: 16px;
 }
 
 .tool:last-child {
   border-bottom: 0;
+  margin-bottom: 4px;
 }
 
 .tool.running {
@@ -453,7 +535,7 @@ summary::-webkit-details-marker {
 }
 
 .tool-body {
-  padding: 0 10px 8px 36px;
+  padding: 0 10px 12px 36px;
 }
 
 .code {
