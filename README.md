@@ -19,7 +19,8 @@ AI 驱动的前端自动化检测工具：输入目标 URL + 测试提示词，A
 - 自动采集网络请求与控制台日志
 - 最终输出完整 Markdown 测试报告；界面可 **保存最后一次 AI 的 MD 文档**
 - Skills 可扩展（`skills/*/SKILL.md`）
-- **需求分析**：上传 PRD/需求文档，AI 提取功能点，并以可编辑逻辑思维导图展示
+- **需求分析**：上传 PRD/需求文档，AI 提取功能点（可增删改），并以可编辑逻辑思维导图展示
+- **测试用例**：基于功能点一键生成测试用例，支持在线编辑，导出 Markdown / JSON
 
 ## 快速开始
 
@@ -127,6 +128,20 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 ### `POST /api/requirements/extract`
 
 仅解析上传文档文本（支持 `.md/.txt/.docx`）。
+
+### `POST /api/requirements/test-cases`
+
+基于功能点树 / 列表生成可编辑测试用例。
+
+```json
+{
+  "llm": { "baseUrl": "...", "apiKey": "...", "model": "..." },
+  "title": "需求标题",
+  "summary": "摘要",
+  "root": { "data": { "text": "根节点" }, "children": [] },
+  "features": [{ "path": "模块 / 功能", "text": "功能", "note": "可选", "tags": ["P0"] }]
+}
+```
 
 ### `GET /api/health`
 

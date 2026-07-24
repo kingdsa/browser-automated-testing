@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { config } from '../config.js'
 import { analyzeRequirementDocument } from '../requirements/analyze.js'
 import { extractRequirementText } from '../requirements/extractText.js'
+import { generateTestCasesFromFeatures } from '../requirements/generateTestCases.js'
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -123,3 +124,42 @@ requirementsRouter.post('/requirements/extract', upload.single('file'), async (r
     res.status(500).json({ ok: false, error: message })
   }
 })
+
+requirementsRouter.post('/requirements/test-cases', async (req, res) => {
+  try {
+    const bodyLlm = parseMaybeJsonObject(req.body?.llm) || (typeof req.body?.llm === 'object' ? req.body.llm : undefined)
+    const llmParsed = llmSchema.safeParse(bodyLlm)
+    if (!llmParsed.success) {
+      res.status(400).json({ error: 'llm 参数无效', details: llmParsed.error.flatten() })
+      return
+    }
+
+    const llm = resolveLlm(llmParsed.data)
+    const title = typeof req.body?.title === 'string' ? req.body.title : ''
+    const summary = typeof req.body?.summary === 'string' ? req.body.summary : ''
+    const root = req.body?.root
+    const features = Array.isArray(req.body?.features) ? req.body.features : undefined
+
+    if (!root && (!features || features.length === 0)) {
+      res.status(400).json({ error: '请先提供功能点树 root 或 features 列表' })
+      return
+    }
+
+    const result = await generateTestCasesFromFeatures({
+      llm,
+      title,
+      summary,
+      root,
+      features,
+    })
+
+    res.json({
+      ok: true,
+      ...result,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    res.status(500).json({ ok: false, error: message })
+  }
+})
+

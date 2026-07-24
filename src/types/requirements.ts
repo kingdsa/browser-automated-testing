@@ -21,3 +21,34 @@ export interface RequirementAnalysisResult {
   featureCount: number
   error?: string
 }
+
+export interface FeaturePoint {
+  path: string
+  text: string
+  note?: string
+  tags?: string[]
+}
+
+export type TestCasePriority = 'P0' | 'P1' | 'P2' | 'P3'
+
+export interface TestCase {
+  id: string
+  feature: string
+  featurePath: string
+  title: string
+  priority: TestCasePriority
+  type: string
+  preconditions: string
+  steps: string[]
+  expected: string
+  note?: string
+}
+
+export interface GenerateTestCasesResult {
+  ok: boolean
+  title: string
+  summary: string
+  cases: TestCase[]
+  caseCount: number
+  error?: string
+}

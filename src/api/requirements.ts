@@ -1,5 +1,10 @@
 import type { LlmSettings } from '@/types/chat'
-import type { RequirementAnalysisResult } from '@/types/requirements'
+import type {
+  FeaturePoint,
+  GenerateTestCasesResult,
+  MindMapNode,
+  RequirementAnalysisResult,
+} from '@/types/requirements'
 
 export async function analyzeRequirement(input: {
   llm: LlmSettings
@@ -40,6 +45,32 @@ export async function extractRequirementFile(file: File): Promise<{
   const data = await res.json().catch(() => ({}))
   if (!res.ok || data.ok === false) {
     throw new Error(data.error || `文档解析失败: HTTP ${res.status}`)
+  }
+  return data
+}
+
+export async function generateTestCases(input: {
+  llm: LlmSettings
+  title?: string
+  summary?: string
+  root?: MindMapNode | null
+  features?: FeaturePoint[]
+}): Promise<GenerateTestCasesResult> {
+  const res = await fetch('/api/requirements/test-cases', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      llm: input.llm,
+      title: input.title,
+      summary: input.summary,
+      root: input.root,
+      features: input.features,
+    }),
+  })
+
+  const data = (await res.json().catch(() => ({}))) as GenerateTestCasesResult & { error?: string }
+  if (!res.ok || data.ok === false) {
+    throw new Error(data.error || `测试用例生成失败: HTTP ${res.status}`)
   }
   return data
 }

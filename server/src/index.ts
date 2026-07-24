@@ -26,6 +26,7 @@ app.get('/', (_req, res) => {
       '/api/chat',
       '/api/requirements/analyze',
       '/api/requirements/extract',
+      '/api/requirements/test-cases',
       '/screenshots/*',
     ],
   })
