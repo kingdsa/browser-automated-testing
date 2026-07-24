@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import type { ChatAttachment } from '@/types/chat'
+import {
+  TEST_CASE_FILE_ACCEPT,
+  MAX_TEST_CASE_FILE_BYTES,
+  formatAttachmentSize,
+  isSupportedTestCaseFile,
+  normalizeTestCaseContent,
+} from '@/utils/testCases'
 
 const props = defineProps<{
   disabled?: boolean
@@ -8,24 +16,46 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  send: [value: string]
+  send: [value: string, attachment?: ChatAttachment]
   stop: []
 }>()
 
 const text = ref('')
+const attachment = ref<ChatAttachment | null>(null)
+const attachError = ref('')
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const dragOver = ref(false)
 
 const presets = [
   '像测试人员一样检查当前页面：布局、可用性、接口错误、控制台报错，最后请输出完整 Markdown 测试报告。',
   '打开目标页后先做快照，再检查首屏布局和关键按钮是否可点击，最后请给我一份 MD 文档结论。',
   '重点检查网络请求失败、4xx/5xx 接口与控制台报错，并在结尾输出可直接保存的 Markdown 报告。',
+  '请严格按照附件测试用例逐条执行，并在最终 Markdown 报告中输出用例对照表（通过/失败/阻塞+证据）。',
 ]
 
+const canSubmit = computed(() => {
+  if (props.disabled || props.running) return false
+  return Boolean(text.value.trim() || attachment.value)
+})
+
+const attachmentLabel = computed(() => {
+  if (!attachment.value) return ''
+  return `${attachment.value.fileName} · ${formatAttachmentSize(attachment.value.size)}`
+})
+
 function submit() {
-  if (props.disabled || props.running) return
-  const value = text.value.trim()
+  if (!canSubmit.value) return
+  const value =
+    text.value.trim() ||
+    (attachment.value
+      ? '请严格按照附件测试用例执行浏览器测试，并输出完整 Markdown 测试报告（含用例对照表）。'
+      : '')
   if (!value) return
-  emit('send', value)
+  emit('send', value, attachment.value || undefined)
   text.value = ''
+  attachment.value = null
+  attachError.value = ''
+  if (fileInputRef.value) fileInputRef.value.value = ''
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -37,6 +67,61 @@ function onKeydown(event: KeyboardEvent) {
 
 function usePreset(preset: string) {
   text.value = preset
+}
+
+function pickFile() {
+  if (props.running) return
+  fileInputRef.value?.click()
+}
+
+function clearAttachment() {
+  attachment.value = null
+  attachError.value = ''
+  if (fileInputRef.value) fileInputRef.value.value = ''
+}
+
+async function loadFile(file: File | null | undefined) {
+  attachError.value = ''
+  if (!file) return
+
+  if (!isSupportedTestCaseFile(file)) {
+    attachError.value = '仅支持 Markdown / TXT / JSON / CSV / LOG 测试用例文件'
+    return
+  }
+  if (file.size > MAX_TEST_CASE_FILE_BYTES) {
+    attachError.value = `文件过大（上限 ${formatAttachmentSize(MAX_TEST_CASE_FILE_BYTES)}）`
+    return
+  }
+
+  try {
+    const raw = await file.text()
+    const content = normalizeTestCaseContent(file.name, raw)
+    if (!content.trim()) {
+      attachError.value = '文件内容为空'
+      return
+    }
+    attachment.value = {
+      type: 'test-case',
+      fileName: file.name,
+      content,
+      size: file.size,
+      mimeType: file.type || undefined,
+    }
+  } catch (error) {
+    attachError.value = error instanceof Error ? error.message : '读取文件失败'
+  }
+}
+
+async function onFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  await loadFile(input.files?.[0])
+}
+
+async function onDrop(event: DragEvent) {
+  event.preventDefault()
+  dragOver.value = false
+  if (props.running) return
+  await loadFile(event.dataTransfer?.files?.[0])
 }
 </script>
 
@@ -55,23 +140,60 @@ function usePreset(preset: string) {
       </button>
     </div>
 
-    <div class="box">
+    <div
+      class="box"
+      :class="{ 'box--drag': dragOver }"
+      @dragenter.prevent="dragOver = true"
+      @dragover.prevent="dragOver = true"
+      @dragleave.prevent="dragOver = false"
+      @drop="onDrop"
+    >
       <textarea
         v-model="text"
         rows="3"
-        placeholder="描述测试目标，并明确要求 AI 输出 Markdown 文档，例如：检查登录页布局与接口错误，最后输出完整 MD 测试报告..."
+        placeholder="描述测试目标；可上传测试用例文件，系统会把 提示词 + Skill + 用例 一起交给 AI..."
         :disabled="running"
         @keydown="onKeydown"
       />
+
+      <div v-if="attachment" class="attach">
+        <div class="attach__main">
+          <span class="attach__badge">用例</span>
+          <div class="attach__meta">
+            <strong>{{ attachment.fileName }}</strong>
+            <span>{{ formatAttachmentSize(attachment.size) }} · 将与提示词、Skill 一并发送给 AI</span>
+          </div>
+        </div>
+        <button type="button" class="attach__remove" :disabled="running" @click="clearAttachment">移除</button>
+      </div>
+
       <div class="tips">
         <p v-if="configTip" class="tip">{{ configTip }}</p>
+        <p v-if="attachError" class="tip tip--error">{{ attachError }}</p>
+        <p class="tip">
+          可上传需求页导出的测试用例（MD/JSON）。发送时会组合：用户提示词 + control-chrome Skill + 用例附件。
+        </p>
         <p class="tip">保存结果只会保留最后一次 AI 的 MD 文档，请在输入中明确要求：输出完整 Markdown 报告</p>
       </div>
+
       <div class="actions">
-        <span class="hint">Enter 发送 · Shift+Enter 换行</span>
+        <div class="left">
+          <input
+            ref="fileInputRef"
+            class="file-input"
+            type="file"
+            :accept="TEST_CASE_FILE_ACCEPT"
+            :disabled="running"
+            @change="onFileChange"
+          />
+          <button type="button" class="ghost" :disabled="running" @click="pickFile">
+            {{ attachment ? '更换用例文件' : '上传测试用例' }}
+          </button>
+          <span class="hint">{{ attachment ? attachmentLabel : '支持 MD / JSON / TXT · 可拖拽到输入框' }}</span>
+        </div>
         <div class="buttons">
           <button v-if="running" type="button" class="danger" @click="emit('stop')">停止</button>
-          <button type="button" class="primary" :disabled="disabled || running || !text.trim()" @click="submit">
+          <button type="button" class="primary" :disabled="!canSubmit" @click="submit">
             {{ running ? '测试中...' : '开始检测' }}
           </button>
         </div>
@@ -112,6 +234,12 @@ function usePreset(preset: string) {
   border-radius: 16px;
   background: var(--input);
   padding: 10px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.box--drag {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .tips {
@@ -132,6 +260,12 @@ function usePreset(preset: string) {
   line-height: 1.5;
 }
 
+.tip--error {
+  color: #b42318;
+  background: #fef3f2;
+  border-color: #fecdca;
+}
+
 textarea {
   width: 100%;
   border: none;
@@ -144,6 +278,67 @@ textarea {
   line-height: 1.6;
 }
 
+.attach {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #b2ddff;
+  background: #eff8ff;
+}
+
+.attach__main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.attach__badge {
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: #1570ef;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  line-height: 1.4;
+}
+
+.attach__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.attach__meta strong {
+  font-size: 13px;
+  color: #175cd3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach__meta span {
+  font-size: 12px;
+  color: #52606d;
+}
+
+.attach__remove {
+  flex-shrink: 0;
+  border: 1px solid #d0d5dd;
+  background: #fff;
+  color: #344054;
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
 .actions {
   display: flex;
   justify-content: space-between;
@@ -152,14 +347,45 @@ textarea {
   margin-top: 8px;
 }
 
+.left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.file-input {
+  display: none;
+}
+
+.ghost {
+  border: 1px solid var(--border);
+  background: var(--panel-soft);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .hint {
   color: var(--muted);
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .buttons {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 button.primary,
@@ -184,5 +410,20 @@ button.primary:disabled {
 button.danger {
   background: #fee4e2;
   color: #b42318;
+}
+
+@media (max-width: 860px) {
+  .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .left {
+    flex-wrap: wrap;
+  }
+
+  .buttons {
+    justify-content: flex-end;
+  }
 }
 </style>

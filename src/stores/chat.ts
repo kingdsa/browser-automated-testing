@@ -2,7 +2,8 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { streamChat } from '@/api/agent'
 import { useSettingsStore } from '@/stores/settings'
-import type { ChatMessageItem, ToolTrace } from '@/types/chat'
+import type { ChatAttachment, ChatMessageItem, ToolTrace } from '@/types/chat'
+import { buildPromptWithTestCase } from '@/utils/testCases'
 
 function uid(prefix = 'm') {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -31,18 +32,24 @@ export const useChatStore = defineStore('chat', () => {
     statusText.value = '已停止'
   }
 
-  async function send(prompt: string) {
-    const content = prompt.trim()
-    if (!content || isRunning.value) return
+  async function send(prompt: string, attachment?: ChatAttachment) {
+    const promptText = prompt.trim()
+    if ((!promptText && !attachment) || isRunning.value) return
 
     const settingsStore = useSettingsStore()
     errorText.value = ''
-    statusText.value = '准备开始...'
+    statusText.value = attachment ? `已加载用例「${attachment.fileName}」，准备开始...` : '准备开始...'
+
+    // Keep full prompt+case in content so multi-turn history still has the suite.
+    const modelContent = attachment
+      ? buildPromptWithTestCase(promptText, attachment)
+      : promptText
 
     messages.value.push({
       id: uid('user'),
       role: 'user',
-      content,
+      content: modelContent,
+      attachments: attachment ? [attachment] : undefined,
       createdAt: Date.now(),
     })
 

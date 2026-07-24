@@ -1,5 +1,15 @@
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool' | 'status'
 
+export type ChatAttachmentType = 'test-case'
+
+export interface ChatAttachment {
+  type: ChatAttachmentType
+  fileName: string
+  content: string
+  size: number
+  mimeType?: string
+}
+
 export interface ToolTrace {
   id?: string
   name: string
@@ -16,6 +26,8 @@ export interface ChatMessageItem {
   id: string
   role: MessageRole
   content: string
+  /** UI-only attachment meta (full content may be embedded into content for the model). */
+  attachments?: ChatAttachment[]
   streaming?: boolean
   tools?: ToolTrace[]
   createdAt: number

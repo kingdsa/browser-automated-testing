@@ -2,6 +2,7 @@
 import { nextTick, onBeforeUnmount, watch, ref } from 'vue'
 import type { ChatMessageItem } from '@/types/chat'
 import { renderMarkdown } from '@/utils/markdown'
+import { formatAttachmentSize } from '@/utils/testCases'
 
 const props = defineProps<{
   messages: ChatMessageItem[]
@@ -124,6 +125,15 @@ function screenshotSrc(tool: NonNullable<ChatMessageItem['tools']>[number]) {
   if (tool.screenshotPath) return tool.screenshotPath
   return ''
 }
+
+/** Hide the long case body in the bubble; full text still lives in message.content for the model. */
+function displayContent(message: ChatMessageItem): string {
+  if (message.role !== 'user' || !message.attachments?.length) return message.content
+  const marker = '\n---\n【测试用例附件'
+  const idx = message.content.indexOf(marker)
+  if (idx >= 0) return message.content.slice(0, idx).trim()
+  return message.content
+}
 </script>
 
 <template>
@@ -137,6 +147,7 @@ function screenshotSrc(tool: NonNullable<ChatMessageItem['tools']>[number]) {
         <li>流式输出思考与结论</li>
         <li>自动调用浏览器工具</li>
         <li>展示接口 / 控制台 / 截图证据</li>
+        <li>可上传测试用例文件：提示词 + Skill + 用例一起执行</li>
       </ul>
     </div>
 
@@ -151,10 +162,20 @@ function screenshotSrc(tool: NonNullable<ChatMessageItem['tools']>[number]) {
         <span v-if="message.streaming" class="streaming">输出中...</span>
       </div>
 
+      <div v-if="message.attachments?.length" class="attachments">
+        <div v-for="(file, idx) in message.attachments" :key="`${message.id}_att_${idx}`" class="attachment">
+          <span class="attachment__badge">{{ file.type === 'test-case' ? '测试用例' : '附件' }}</span>
+          <div class="attachment__meta">
+            <strong>{{ file.fileName }}</strong>
+            <span>{{ formatAttachmentSize(file.size) }} · 已随提示词发送给 AI</span>
+          </div>
+        </div>
+      </div>
+
       <div
-        v-if="message.content"
+        v-if="displayContent(message)"
         class="content markdown-body"
-        v-html="renderMarkdown(message.content)"
+        v-html="renderMarkdown(displayContent(message))"
       />
 
       <div v-if="message.tools?.length" class="tools">
