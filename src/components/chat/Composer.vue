@@ -4,6 +4,7 @@ import { ref } from 'vue'
 const props = defineProps<{
   disabled?: boolean
   running?: boolean
+  configTip?: string
 }>()
 
 const emit = defineEmits<{
@@ -62,7 +63,10 @@ function usePreset(preset: string) {
         :disabled="running"
         @keydown="onKeydown"
       />
-      <p class="md-tip">保存结果只会保留最后一次 AI 的 MD 文档，请在输入中明确要求：输出完整 Markdown 报告</p>
+      <div class="tips">
+        <p v-if="configTip" class="tip">{{ configTip }}</p>
+        <p class="tip">保存结果只会保留最后一次 AI 的 MD 文档，请在输入中明确要求：输出完整 Markdown 报告</p>
+      </div>
       <div class="actions">
         <span class="hint">Enter 发送 · Shift+Enter 换行</span>
         <div class="buttons">
@@ -110,8 +114,15 @@ function usePreset(preset: string) {
   padding: 10px;
 }
 
-.md-tip {
+.tips {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   margin: 8px 2px 0;
+}
+
+.tip {
+  margin: 0;
   color: #b54708;
   background: #fffaeb;
   border: 1px solid #fedf89;

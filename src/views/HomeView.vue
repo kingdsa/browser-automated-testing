@@ -107,11 +107,10 @@ async function saveReport() {
       <Composer
         :disabled="!canSend"
         :running="chat.isRunning"
+        :config-tip="canSend ? '' : '请先配置 Base URL / Model；API Key 可写在页面或服务端 .env'"
         @send="chat.send"
         @stop="chat.stop"
       />
-
-      <p v-if="!canSend" class="config-tip">请先配置 Base URL / Model；API Key 可写在页面或服务端 .env</p>
     </main>
   </div>
 </template>
@@ -138,7 +137,6 @@ async function saveReport() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  position: relative;
 }
 
 .topbar {
@@ -222,19 +220,6 @@ async function saveReport() {
   color: #b42318;
   background: #fef3f2;
   border-bottom-color: #fecdca;
-}
-
-.config-tip {
-  position: absolute;
-  left: 24px;
-  bottom: 110px;
-  margin: 0;
-  color: #b54708;
-  background: #fffaeb;
-  border: 1px solid #fedf89;
-  border-radius: 10px;
-  padding: 8px 12px;
-  font-size: 12px;
 }
 
 @media (max-width: 960px) {
