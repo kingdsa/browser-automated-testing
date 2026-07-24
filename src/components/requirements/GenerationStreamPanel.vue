@@ -18,6 +18,7 @@ const emit = defineEmits<{
 }>()
 
 const scroller = ref<HTMLElement | null>(null)
+const rawPreRefs = new Map<string, HTMLElement>()
 const pinnedToBottom = ref(true)
 const BOTTOM_THRESHOLD = 80
 
@@ -35,6 +36,11 @@ function onListScroll() {
   pinnedToBottom.value = isNearBottom(el)
 }
 
+function setRawPre(messageId: string, el: Element | null) {
+  if (el instanceof HTMLElement) rawPreRefs.set(messageId, el)
+  else rawPreRefs.delete(messageId)
+}
+
 function scrollToBottom(force = false) {
   const el = scroller.value
   if (!el) return
@@ -42,12 +48,37 @@ function scrollToBottom(force = false) {
   el.scrollTop = el.scrollHeight
 }
 
+function onRawPreScroll(event: Event) {
+  const pre = event.target
+  if (!(pre instanceof HTMLElement)) return
+  // If user reads earlier raw output, stop forcing this pre to the end.
+  if (!isNearBottom(pre)) {
+    // Don't unpin the whole list unless the list itself is scrolled up.
+    // Just leave this pre alone until user returns near bottom.
+    pre.dataset.pinned = '0'
+    return
+  }
+  pre.dataset.pinned = '1'
+}
+
+function scrollRawPresIfNeeded(force = false) {
+  for (const pre of rawPreRefs.values()) {
+    const pinned = pre.dataset.pinned !== '0'
+    if (force || (pinned && pinnedToBottom.value)) {
+      pre.scrollTop = pre.scrollHeight
+      pre.dataset.pinned = '1'
+    }
+  }
+}
+
 watch(
   () => props.messages.map((m) => m.id).join('|'),
   async () => {
     pinnedToBottom.value = true
     await nextTick()
+    for (const pre of rawPreRefs.values()) pre.dataset.pinned = '1'
     scrollToBottom(true)
+    scrollRawPresIfNeeded(true)
   },
 )
 
@@ -58,7 +89,10 @@ watch(
   async () => {
     if (!pinnedToBottom.value) return
     await nextTick()
-    requestAnimationFrame(() => scrollToBottom())
+    requestAnimationFrame(() => {
+      scrollToBottom()
+      scrollRawPresIfNeeded(false)
+    })
   },
 )
 
@@ -68,16 +102,24 @@ function roleLabel(role: GenerationMessage['role']) {
   return 'AI'
 }
 
-function formatContent(message: GenerationMessage) {
-  if (message.role === 'assistant') {
-    const body = message.content || (message.streaming ? '…' : '')
-    if (!body) return ''
-    if (body.trim().startsWith('{') || body.trim().startsWith('[')) {
-      return renderMarkdown('```json\n' + body + '\n```')
-    }
-    return renderMarkdown(body)
-  }
+function isRawAssistant(message: GenerationMessage) {
+  if (message.role !== 'assistant') return false
+  const body = message.content.trim()
+  return !body || body.startsWith('{') || body.startsWith('[') || message.streaming
+}
+
+function assistantText(message: GenerationMessage) {
+  return message.content || (message.streaming ? '…' : '')
+}
+
+function formatMarkdown(message: GenerationMessage) {
   return renderMarkdown(message.content)
+}
+
+function jumpToLatest() {
+  pinnedToBottom.value = true
+  for (const pre of rawPreRefs.values()) pre.dataset.pinned = '1'
+  scrollToBottom(true)
 }
 </script>
 
@@ -109,10 +151,18 @@ function formatContent(message: GenerationMessage) {
           <span class="role">{{ roleLabel(message.role) }}</span>
           <span v-if="message.streaming" class="streaming">输出中...</span>
         </div>
+
+        <pre
+          v-if="isRawAssistant(message) && (message.content || message.streaming)"
+          class="raw-output"
+          :ref="(el) => setRawPre(message.id, el as Element | null)"
+          @scroll.passive="onRawPreScroll"
+        >{{ assistantText(message) }}</pre>
+
         <div
-          v-if="message.content || message.streaming"
+          v-else-if="message.content || message.streaming"
           class="content markdown-body"
-          v-html="formatContent(message)"
+          v-html="formatMarkdown(message)"
         />
       </article>
     </div>
@@ -121,7 +171,7 @@ function formatContent(message: GenerationMessage) {
       v-if="!pinnedToBottom"
       type="button"
       class="jump-latest"
-      @click="pinnedToBottom = true; scrollToBottom(true)"
+      @click="jumpToLatest"
     >
       回到最新
     </button>
@@ -259,6 +309,22 @@ function formatContent(message: GenerationMessage) {
   font-size: 13px;
   line-height: 1.6;
   word-break: break-word;
+}
+
+.raw-output {
+  max-height: 48vh;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: #0b1220;
+  color: #e5eefc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overscroll-behavior: contain;
 }
 
 .content :deep(pre) {
