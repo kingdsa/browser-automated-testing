@@ -110,23 +110,25 @@ export async function runAgent(input: RunAgentInput): Promise<void> {
     },
   })
 
-  const browserMode = sessionConfig?.browserMode ?? 'auto'
+  let browserMode = sessionConfig?.browserMode ?? 'auto'
   const waitForLogin = Boolean(sessionConfig?.waitForLogin)
   const requestedHeadless = sessionConfig?.headless ?? config.defaultHeadless
-  // Attach / manual login must show a real window.
+  const hasRemoteCdp = Boolean(sessionConfig?.cdpEndpoint?.trim())
+  // Attach / manual login prefer a real window; CDP attach does not need local GUI.
   let headless = waitForLogin || browserMode === 'attach' ? false : requestedHeadless
 
   // Servers without an X/Wayland display cannot launch headed Chromium.
-  // Force headless for launch/auto fallback; block GUI-only flows early.
+  // Force headless for local launch; allow manual login only via remote CDP.
   if (!headless && !config.canUseHeadedBrowser) {
-    const hasRemoteCdp = Boolean(sessionConfig?.cdpEndpoint?.trim())
-    if (waitForLogin) {
+    if (waitForLogin && !hasRemoteCdp) {
       onEvent({
         type: 'error',
         data: {
           message:
-            '当前服务器没有图形界面（缺少 DISPLAY/WAYLAND_DISPLAY），无法使用“等待手动登录”。' +
-            '请改为无头模式（browserMode=launch/auto + headless=true），或配置远程 CDP（cdpEndpoint），或用 xvfb-run 启动服务。',
+            '当前服务器没有图形界面（缺少 DISPLAY/WAYLAND_DISPLAY），本地无法弹出登录窗口。' +
+            '若仍要用“等待手动登录”，请在本机/有界面机器启动带远程调试的 Chromium，' +
+            '把 cdpEndpoint 填成该地址（例如 http://你的电脑IP:9222），然后在那台机器上登录。' +
+            '也可改用 xvfb + VNC 暴露服务器浏览器，或关闭 waitForLogin 走无头模式。',
         },
       })
       onEvent({ type: 'done', data: { sessionId } })
@@ -144,8 +146,19 @@ export async function runAgent(input: RunAgentInput): Promise<void> {
       onEvent({ type: 'done', data: { sessionId } })
       return
     }
-    // auto/launch headed request: force headless so Playwright can start.
-    if (browserMode !== 'attach') {
+    if (waitForLogin && hasRemoteCdp) {
+      // Manual login happens on the remote headed browser; server only attaches via CDP.
+      browserMode = 'attach'
+      headless = true
+      onEvent({
+        type: 'status',
+        data: {
+          message:
+            '无图形界面：将通过远程 CDP 附着浏览器并等待你在那台机器上手动登录。',
+        },
+      })
+    } else if (browserMode !== 'attach') {
+      // auto/launch headed request: force headless so Playwright can start.
       headless = true
       onEvent({
         type: 'status',

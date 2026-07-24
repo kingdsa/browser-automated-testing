@@ -139,30 +139,62 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 
 ## 服务器部署（无图形界面）
 
-Linux 服务器通常没有 X Server，Playwright **不能**以 headed 模式启动 Chromium，否则会报：
+Linux 服务器通常没有 X Server，Playwright **不能**在本机弹出可操作的浏览器窗口，否则会报：
 
 `Looks like you launched a headed browser without having a XServer running`
 
-推荐配置：
-
+### 场景 1：不需要登录 / 可用固定账号脚本登录
 1. 服务器安装浏览器依赖：`npx playwright install chromium` 以及（Linux）`npx playwright install-deps chromium`
 2. 保持 `browserMode=auto` 或 `launch`
 3. **勾选无头模式**（或设置 `PLAYWRIGHT_HEADLESS=true`）
-4. **关闭**“等待手动登录”（服务器上无法弹出登录窗口）
-5. 需要登录态时，改为附着远程 CDP（`cdpEndpoint` 指向可访问的 Chromium 调试端口），而不是本机 GUI 登录
+4. **关闭**“等待手动登录”
 
-可选：若必须 headed，可用虚拟显示：
+### 场景 2：仍然要用“等待手动登录”（推荐：远程 CDP）
+线上 Agent 跑在服务器，登录窗口开在你本机（或任意有界面机器）：
+
+1. 在**有界面机器**用远程调试启动 Chromium 内核浏览器，并打开目标站：
+
+```bash
+# macOS Chrome 示例
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/chrome-bat-profile" \
+  --remote-allow-origins=* \
+  "https://你的业务站"
+```
+
+2. 确保服务器能访问该调试端口（同 VPC / 内网穿透 / SSH 隧道均可）。SSH 隧道示例：
+
+```bash
+# 在服务器上把本机 9222 转到你电脑的 9222
+ssh -N -R 9222:127.0.0.1:9222 user@server
+# 或反过来：在你电脑把服务器请求转到本机
+ssh -N -L 0.0.0.0:9222:127.0.0.1:9222 user@your-laptop
+```
+
+3. 前端设置：
+   - 勾选 **等待手动登录**
+   - 高级里填写 `cdpEndpoint`，例如 `http://你的电脑内网IP:9222` 或隧道后的 `http://127.0.0.1:9222`
+   - 开始测试后，在**那台有界面机器**的浏览器里完成登录；服务端会等待业务页出现后继续
+
+> 说明：无图形服务器上“等待手动登录”**不能**再依赖本机弹窗；它依赖你提供的远程 headed 浏览器。
+
+### 场景 3：必须在服务器本机 headed（虚拟显示）
 
 ```bash
 # Debian/Ubuntu
 sudo apt-get install -y xvfb
+# 仅虚拟显示（你仍看不到窗口，除非再配 VNC）
 xvfb-run -a npm run server
 ```
 
+若还要**看见并操作**服务器浏览器，请再加 x11vnc / noVNC，用 VNC 客户端连上去登录。
+
 服务端逻辑：
 
-- 检测到 Linux 且无 `DISPLAY`/`WAYLAND_DISPLAY` 时，`launch`/`auto` 会**自动强制 headless**
-- 若仍选择 `waitForLogin` 或 `browserMode=attach`（且无可用 CDP），会返回明确错误而不是让 Chromium 崩溃
+- 检测到 Linux 且无 `DISPLAY`/`WAYLAND_DISPLAY` 时，本地 `launch`/`auto` 会**自动强制 headless**
+- `waitForLogin` 且未配置 `cdpEndpoint`：返回明确错误
+- `waitForLogin` 且配置了 `cdpEndpoint`：允许，并强制通过远程 CDP 附着，等待你在远程浏览器登录
 
 ## 测试报告
 
@@ -193,11 +225,17 @@ Agent 系统提示会要求最终输出 **完整、可直接保存的 Markdown �
 
 ## 登录态说明
 
-### 方案 A（推荐，零配置）
+### 方案 A（本机桌面，零配置）
 1. 浏览器模式选 `auto` 或 `launch`
 2. 勾选 **等待手动登录**
 3. 开始测试后，在弹出窗口完成登录
 4. 系统识别到非登录页后自动继续
+
+### 方案 A2（线上服务器仍要手动登录）
+1. 在有界面机器启动带 `--remote-debugging-port` 的 Chromium
+2. 把该地址填到 `cdpEndpoint`
+3. 勾选 **等待手动登录**
+4. 在那台机器上登录；Agent 附着并等待业务页后继续
 
 ### 方案 B（附着已打开标签）
 1. 用远程调试端口启动任意 Chromium 内核浏览器（Chrome / Edge / 360 / Arc…）

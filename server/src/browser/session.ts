@@ -320,7 +320,9 @@ export class BrowserSession {
     let lastProgressAt = 0
     let sawLoginPage = false
     options?.onProgress?.(
-      `请在浏览器窗口中完成登录（最多 ${Math.round(timeoutMs / 1000)}s）。登录成功并看到业务内容后会自动继续。`,
+      this.connectedViaCdp
+        ? `请在远程 CDP 浏览器中完成登录（最多 ${Math.round(timeoutMs / 1000)}s）。登录成功并看到业务内容后会自动继续。`
+        : `请在浏览器窗口中完成登录（最多 ${Math.round(timeoutMs / 1000)}s）。登录成功并看到业务内容后会自动继续。`,
     )
 
     while (Date.now() - started < timeoutMs) {

@@ -138,8 +138,12 @@ onMounted(refreshMeta)
       </p>
       <label class="inline">
         <input v-model="settingsStore.settings.session.waitForLogin" type="checkbox" />
-        <span>等待手动登录（推荐，免配浏览器）</span>
+        <span>等待手动登录（本机有界面时推荐）</span>
       </label>
+      <p class="hint">
+        本机桌面：勾选后会弹出浏览器，你登录完自动继续。
+        线上无图形服务器：不能本地弹窗，请在“高级”里填远程 CDP，在有界面机器上登录，系统会等待该浏览器完成登录。
+      </p>
       <label v-if="settingsStore.settings.session.waitForLogin">
         <span>登录等待秒数</span>
         <input
@@ -158,7 +162,8 @@ onMounted(refreshMeta)
         <span>无头模式（附着/手动登录时自动关闭）</span>
       </label>
       <p class="hint">
-        部署到无图形界面的 Linux 服务器时请勾选无头模式；服务端也会在缺少 DISPLAY 时自动强制 headless。
+        部署到无图形界面的 Linux 服务器时：无头模式可直接跑无需登录的页面；
+        需要手动登录时请配置远程 CDP（或 xvfb + VNC），不要指望服务器本地弹窗。
       </p>
       <label>
         <span>最大 Agent 步数（0 = 无限）</span>
@@ -172,8 +177,12 @@ onMounted(refreshMeta)
       </label>
       <details class="advanced">
         <summary>高级：附着调试端口（可选）</summary>
+        <p class="hint">
+          线上服务器要“等待手动登录”时必填：指向你本机/有界面机器的 Chromium 远程调试地址，
+          推荐经 SSH 隧道后填 `http://127.0.0.1:9222`。
+        </p>
         <label>
-          <span>CDP Endpoint（留空=自动扫描）</span>
+          <span>CDP Endpoint（留空=自动扫描本机端口）</span>
           <input
             v-model="settingsStore.settings.session.cdpEndpoint"
             type="text"
