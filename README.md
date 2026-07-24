@@ -56,6 +56,7 @@ npm run dev
    - 仅保存 **最后一次 AI 完整回复** 作为 Markdown 文档
    - 支持的浏览器可弹出选目录对话框；否则回退为浏览器默认下载
    - 默认文件名形如 `browser-test-report-YYYYMMDD-HHmm.md`
+   - 示例报告：[browser-test-report-20260724-1614.md](./browser-test-report-20260724-1614.md)
 
 ## 架构
 
@@ -149,6 +150,7 @@ Agent 系统提示会要求最终输出 **完整、可直接保存的 Markdown �
 1. 只取会话中 **最后一次非流式 AI 回复** 的正文
 2. 不拼接多轮过程、不额外包装工具轨迹
 3. 因此请在用户输入中明确要求：“输出完整 Markdown 测试报告”
+4. 下载文件名示例：`browser-test-report-20260724-1614.md`（完整示例见 [browser-test-report-20260724-1614.md](./browser-test-report-20260724-1614.md)）
 
 ## 与 Codex control-chrome 的关系
 
