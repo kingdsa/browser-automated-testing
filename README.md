@@ -4,6 +4,10 @@ AI 驱动的前端自动化检测工具：输入目标 URL + 测试提示词，A
 
 > 说明：Codex 桌面端的 `control-chrome` 依赖私有 browser runtime / Chrome 扩展。本项目把同一测试思路产品化，使用 **Playwright + OpenAI 兼容接口** 独立运行。`skills/control-chrome` 会作为系统提示注入 Agent。
 
+## 项目预览
+
+![Browser Automated Testing 项目预览](./image.png)
+
 ## 功能
 
 - 对接第三方中转站（OpenAI 兼容：`base_url` + `api_key` + `model`）
