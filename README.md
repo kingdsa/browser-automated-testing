@@ -135,6 +135,34 @@ Vue 3 对话 UI  --SSE-->  Express Agent  --tools-->  Playwright Browser
 | `LLM_API_KEY` | 默认 API Key |
 | `LLM_MODEL` | 默认模型 |
 | `MAX_AGENT_STEPS` | 默认最大工具循环步数（`0` = 无限） |
+| `PLAYWRIGHT_HEADLESS` / `HEADLESS` | 是否默认无头；不填则自动检测（Linux 无 DISPLAY/WAYLAND_DISPLAY 时默认 `true`） |
+
+## 服务器部署（无图形界面）
+
+Linux 服务器通常没有 X Server，Playwright **不能**以 headed 模式启动 Chromium，否则会报：
+
+`Looks like you launched a headed browser without having a XServer running`
+
+推荐配置：
+
+1. 服务器安装浏览器依赖：`npx playwright install chromium` 以及（Linux）`npx playwright install-deps chromium`
+2. 保持 `browserMode=auto` 或 `launch`
+3. **勾选无头模式**（或设置 `PLAYWRIGHT_HEADLESS=true`）
+4. **关闭**“等待手动登录”（服务器上无法弹出登录窗口）
+5. 需要登录态时，改为附着远程 CDP（`cdpEndpoint` 指向可访问的 Chromium 调试端口），而不是本机 GUI 登录
+
+可选：若必须 headed，可用虚拟显示：
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install -y xvfb
+xvfb-run -a npm run server
+```
+
+服务端逻辑：
+
+- 检测到 Linux 且无 `DISPLAY`/`WAYLAND_DISPLAY` 时，`launch`/`auto` 会**自动强制 headless**
+- 若仍选择 `waitForLogin` 或 `browserMode=attach`（且无可用 CDP），会返回明确错误而不是让 Chromium 崩溃
 
 ## 测试报告
 

@@ -71,6 +71,10 @@ export const useSettingsStore = defineStore('settings', () => {
       if (!rawHasSessionMax() && typeof defaults.session.maxSteps === 'number') {
         settings.value.session.maxSteps = defaults.session.maxSteps
       }
+      // Prefer server-side headless default on first visit / bare settings.
+      if (!rawHasSessionHeadless() && typeof defaults.session.headless === 'boolean') {
+        settings.value.session.headless = defaults.session.headless
+      }
     } catch {
       // ignore offline backend during first paint
     }
@@ -82,6 +86,17 @@ export const useSettingsStore = defineStore('settings', () => {
       if (!raw) return false
       const parsed = JSON.parse(raw)
       return typeof parsed?.session?.maxSteps === 'number'
+    } catch {
+      return false
+    }
+  }
+
+  function rawHasSessionHeadless() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (!raw) return false
+      const parsed = JSON.parse(raw)
+      return typeof parsed?.session?.headless === 'boolean'
     } catch {
       return false
     }

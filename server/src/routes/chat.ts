@@ -51,11 +51,12 @@ chatRouter.get('/defaults', (_req, res) => {
     },
     session: {
       maxSteps: config.defaultMaxSteps,
-      headless: false,
+      headless: config.defaultHeadless,
       browserMode: 'auto',
       waitForLogin: false,
       loginWaitSeconds: 180,
       cdpEndpoint: '',
+      canUseHeadedBrowser: config.canUseHeadedBrowser,
     },
   })
 })

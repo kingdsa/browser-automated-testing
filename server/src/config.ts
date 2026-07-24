@@ -7,6 +7,29 @@ dotenv.config()
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '../..')
 
+function envFlag(name: string): boolean | undefined {
+  const raw = process.env[name]
+  if (raw == null || raw === '') return undefined
+  const value = raw.trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(value)) return true
+  if (['0', 'false', 'no', 'off'].includes(value)) return false
+  return undefined
+}
+
+/** Linux servers without DISPLAY/Wayland cannot open a headed Chromium window. */
+export function canUseHeadedBrowser(): boolean {
+  if (process.platform !== 'linux') return true
+  if (process.env.DISPLAY || process.env.WAYLAND_DISPLAY) return true
+  return false
+}
+
+export function resolveDefaultHeadless(): boolean {
+  const fromEnv = envFlag('PLAYWRIGHT_HEADLESS') ?? envFlag('HEADLESS')
+  if (fromEnv != null) return fromEnv
+  // Local desktop defaults to headed; server / CI defaults to headless.
+  return !canUseHeadedBrowser()
+}
+
 export const config = {
   port: Number(process.env.PORT || 8787),
   rootDir,
@@ -18,4 +41,6 @@ export const config = {
     model: process.env.LLM_MODEL || 'gpt-4o-mini',
   },
   defaultMaxSteps: Number(process.env.MAX_AGENT_STEPS || 0),
+  defaultHeadless: resolveDefaultHeadless(),
+  canUseHeadedBrowser: canUseHeadedBrowser(),
 }

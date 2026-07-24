@@ -157,6 +157,9 @@ onMounted(refreshMeta)
         />
         <span>无头模式（附着/手动登录时自动关闭）</span>
       </label>
+      <p class="hint">
+        部署到无图形界面的 Linux 服务器时请勾选无头模式；服务端也会在缺少 DISPLAY 时自动强制 headless。
+      </p>
       <label>
         <span>最大 Agent 步数（0 = 无限）</span>
         <input

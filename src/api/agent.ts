@@ -103,6 +103,7 @@ export async function fetchDefaults() {
       waitForLogin: boolean
       loginWaitSeconds: number
       cdpEndpoint: string
+      canUseHeadedBrowser?: boolean
     }
   }>
 }

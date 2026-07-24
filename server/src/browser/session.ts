@@ -125,10 +125,29 @@ export class BrowserSession {
   }
 
   private async launchFreshPage(): Promise<Page> {
-    this.browser = await chromium.launch({
-      headless: this.headless,
-      args: ['--disable-blink-features=AutomationControlled'],
-    })
+    try {
+      this.browser = await chromium.launch({
+        headless: this.headless,
+        args: [
+          '--disable-blink-features=AutomationControlled',
+          // Common hard requirements for Linux containers / CI without privileged sandbox.
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+        ],
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (/XServer|Missing X server|\$DISPLAY|headless: true|xvfb-run/i.test(message)) {
+        throw new Error(
+          '无法启动有界面浏览器：当前环境没有图形显示（X Server / DISPLAY）。' +
+            '请勾选无头模式（headless=true），或设置 PLAYWRIGHT_HEADLESS=true，' +
+            '或使用 `xvfb-run -a npm run server` 启动。原始错误：' +
+            message,
+        )
+      }
+      throw error
+    }
 
     this.context = await this.browser.newContext({
       viewport: { width: 1440, height: 900 },

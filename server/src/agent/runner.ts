@@ -112,8 +112,50 @@ export async function runAgent(input: RunAgentInput): Promise<void> {
 
   const browserMode = sessionConfig?.browserMode ?? 'auto'
   const waitForLogin = Boolean(sessionConfig?.waitForLogin)
+  const requestedHeadless = sessionConfig?.headless ?? config.defaultHeadless
   // Attach / manual login must show a real window.
-  const headless = waitForLogin || browserMode === 'attach' ? false : (sessionConfig?.headless ?? false)
+  let headless = waitForLogin || browserMode === 'attach' ? false : requestedHeadless
+
+  // Servers without an X/Wayland display cannot launch headed Chromium.
+  // Force headless for launch/auto fallback; block GUI-only flows early.
+  if (!headless && !config.canUseHeadedBrowser) {
+    const hasRemoteCdp = Boolean(sessionConfig?.cdpEndpoint?.trim())
+    if (waitForLogin) {
+      onEvent({
+        type: 'error',
+        data: {
+          message:
+            '当前服务器没有图形界面（缺少 DISPLAY/WAYLAND_DISPLAY），无法使用“等待手动登录”。' +
+            '请改为无头模式（browserMode=launch/auto + headless=true），或配置远程 CDP（cdpEndpoint），或用 xvfb-run 启动服务。',
+        },
+      })
+      onEvent({ type: 'done', data: { sessionId } })
+      return
+    }
+    if (browserMode === 'attach' && !hasRemoteCdp) {
+      onEvent({
+        type: 'error',
+        data: {
+          message:
+            '当前服务器没有图形界面，且未配置 cdpEndpoint，无法附着本地浏览器标签。' +
+            '请填写可访问的远程 CDP 地址，或改用 browserMode=launch + headless=true。',
+        },
+      })
+      onEvent({ type: 'done', data: { sessionId } })
+      return
+    }
+    // auto/launch headed request: force headless so Playwright can start.
+    if (browserMode !== 'attach') {
+      headless = true
+      onEvent({
+        type: 'status',
+        data: {
+          message: '检测到无图形界面环境，已自动切换为无头模式启动 Chromium。',
+        },
+      })
+    }
+  }
+
   const browser = new BrowserSession({
     headless,
     mode: browserMode,
