@@ -6,7 +6,7 @@ import { useChatStore } from '@/stores/chat'
 import { useSettingsStore } from '@/stores/settings'
 import { computed, onMounted, ref } from 'vue'
 import { fetchDefaults } from '@/api/agent'
-import { buildMarkdownReport, defaultReportName, saveMarkdownFile } from '@/utils/report'
+import { defaultReportName, getLastAssistantMarkdown, saveMarkdownFile } from '@/utils/report'
 
 const chat = useChatStore()
 const settings = useSettingsStore()
@@ -32,9 +32,9 @@ const canSend = computed(() => {
   return Boolean(llm.baseUrl && hasKey && llm.model)
 })
 
-const hasResult = computed(() =>
-  chat.messages.some((m) => m.role === 'assistant' && m.content.trim() && !m.streaming),
-)
+const lastAssistantMarkdown = computed(() => getLastAssistantMarkdown(chat.messages))
+
+const hasResult = computed(() => Boolean(lastAssistantMarkdown.value))
 
 const canSave = computed(() => !chat.isRunning && hasResult.value)
 
@@ -48,14 +48,15 @@ function flashTip(message: string) {
 
 async function saveReport() {
   if (!canSave.value || saving.value) return
+  const content = lastAssistantMarkdown.value
+  if (!content) {
+    flashTip('暂无 AI 的 Markdown 文档可保存，请先让 AI 输出 MD 报告')
+    return
+  }
   saving.value = true
   try {
-    const content = buildMarkdownReport(chat.messages, {
-      targetUrl: settings.settings.session.targetUrl,
-      model: settings.settings.llm.model,
-    })
     const result = await saveMarkdownFile(content, defaultReportName())
-    flashTip(result === 'picked' ? '已保存到所选位置' : '当前浏览器不支持选目录，已下载到默认下载文件夹')
+    flashTip(result === 'picked' ? '已保存最后一次 AI 的 MD 文档' : '当前浏览器不支持选目录，已下载最后一次 AI 的 MD 文档')
   } catch (error) {
     if ((error as Error)?.name === 'AbortError') {
       // 用户在保存对话框点了取消，无需提示
@@ -86,7 +87,7 @@ async function saveReport() {
             type="button"
             class="ghost save"
             :disabled="!canSave || saving"
-            :title="canSave ? '保存本次测试结果为 Markdown' : '分析结束后可保存结果'"
+            :title="canSave ? '仅保存最后一次 AI 输出的 Markdown 文档' : '请先让 AI 输出完整 MD 文档后再保存'"
             @click="saveReport"
           >
             {{ saving ? '保存中...' : '保存本次测试结果' }}

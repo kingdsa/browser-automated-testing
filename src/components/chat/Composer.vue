@@ -14,9 +14,9 @@ const emit = defineEmits<{
 const text = ref('')
 
 const presets = [
-  '像测试人员一样检查当前页面：布局、可用性、接口错误、控制台报错，并输出分级问题报告。',
-  '打开目标页后先做快照，再检查首屏布局和关键按钮是否可点击，最后汇总问题。',
-  '重点检查网络请求失败、4xx/5xx 接口，以及页面 JS 报错，给出复现路径。',
+  '像测试人员一样检查当前页面：布局、可用性、接口错误、控制台报错，最后请输出完整 Markdown 测试报告。',
+  '打开目标页后先做快照，再检查首屏布局和关键按钮是否可点击，最后请给我一份 MD 文档结论。',
+  '重点检查网络请求失败、4xx/5xx 接口与控制台报错，并在结尾输出可直接保存的 Markdown 报告。',
 ]
 
 function submit() {
@@ -58,10 +58,11 @@ function usePreset(preset: string) {
       <textarea
         v-model="text"
         rows="3"
-        placeholder="描述你的测试目标，例如：检查登录页布局和接口错误..."
+        placeholder="描述测试目标，并明确要求 AI 输出 Markdown 文档，例如：检查登录页布局与接口错误，最后输出完整 MD 测试报告..."
         :disabled="running"
         @keydown="onKeydown"
       />
+      <p class="md-tip">保存结果只会保留最后一次 AI 的 MD 文档，请在输入中明确要求：输出完整 Markdown 报告</p>
       <div class="actions">
         <span class="hint">Enter 发送 · Shift+Enter 换行</span>
         <div class="buttons">
@@ -107,6 +108,17 @@ function usePreset(preset: string) {
   border-radius: 16px;
   background: var(--input);
   padding: 10px;
+}
+
+.md-tip {
+  margin: 8px 2px 0;
+  color: #b54708;
+  background: #fffaeb;
+  border: 1px solid #fedf89;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 textarea {

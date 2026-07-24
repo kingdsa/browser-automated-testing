@@ -74,6 +74,8 @@ export function buildSystemPrompt(skills: SkillMeta[], targetUrl?: string): stri
     '- 不要无限点点点；优先覆盖核心路径，达到足够证据后及时汇总。',
     '- 对破坏性操作（提交订单、删除、支付）要谨慎，默认只做只读验证，除非用户明确要求。',
     '- 输出使用中文，过程中可简要说明当前测试意图。',
+    '- 最终结论必须输出一份完整、可直接保存的 Markdown 文档（用户会单独保存最后一次 AI 的 MD 内容）。',
+    '- Markdown 报告建议包含：测试目标、覆盖范围、问题列表（级别/现象/证据/建议）、结论与风险。',
     '',
     targetUrl ? `## 本次目标 URL\n${targetUrl}` : '## 本次目标 URL\n由用户消息指定',
     '',
@@ -86,6 +88,6 @@ export function buildSystemPrompt(skills: SkillMeta[], targetUrl?: string): stri
     '3. get_network_logs / get_console_logs 检查接口与错误',
     '4. 按测试路径 click / type / scroll / wait',
     '5. take_screenshot 记录关键证据',
-    '6. 输出结构化测试报告',
+    '6. 输出完整 Markdown 测试报告（作为最后一次回复主体）',
   ].join('\n')
 }
