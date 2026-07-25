@@ -71,66 +71,177 @@ async function saveReport() {
 </script>
 
 <template>
-  <div class="layout">
-    <SettingsPanel />
-
-    <main class="main">
-      <header class="topbar">
-        <div class="topbar__left">
-          <AppNav />
-          <div>
-            <h1>Browser Automated Testing</h1>
-            <p>AI 模拟测试人员 · 控制浏览器 · 流式反馈</p>
-          </div>
+  <div class="shell">
+    <header class="topbar">
+      <div class="topbar__left">
+        <AppNav />
+        <div class="titles">
+          <h1>Browser Automated Testing</h1>
+          <p>AI 模拟测试人员 · 控制浏览器 · 流式反馈</p>
         </div>
-        <div class="topbar__actions">
-          <Transition name="tip">
-            <span v-if="saveTip" class="save-tip">{{ saveTip }}</span>
-          </Transition>
-          <button
-            type="button"
-            class="ghost save"
-            :disabled="!canSave || saving"
-            :title="canSave ? '仅保存最后一次 AI 输出的 Markdown 文档' : '请先让 AI 输出完整 MD 文档后再保存'"
-            @click="saveReport"
-          >
-            {{ saving ? '保存中...' : '保存本次测试结果' }}
-          </button>
-          <button type="button" class="ghost" :disabled="chat.isRunning" @click="chat.clear()">
-            清空会话
-          </button>
-        </div>
-      </header>
-
-      <div v-if="chat.statusText || chat.errorText" class="status-bar" :class="{ error: !!chat.errorText }">
-        <span>{{ chat.errorText || chat.statusText }}</span>
       </div>
+      <div class="topbar__actions">
+        <Transition name="tip">
+          <span v-if="saveTip" class="save-tip">{{ saveTip }}</span>
+        </Transition>
+        <button
+          type="button"
+          class="btn ghost save"
+          :disabled="!canSave || saving"
+          :title="canSave ? '仅保存最后一次 AI 输出的 Markdown 文档' : '请先让 AI 输出完整 MD 文档后再保存'"
+          @click="saveReport"
+        >
+          {{ saving ? '保存中...' : '保存本次测试结果' }}
+        </button>
+        <button type="button" class="btn ghost" :disabled="chat.isRunning" @click="chat.clear()">
+          清空会话
+        </button>
+      </div>
+    </header>
 
-      <MessageList :messages="chat.visibleMessages" />
+    <div class="shell-body">
+      <SettingsPanel />
 
-      <Composer
-        :disabled="!canSend"
-        :running="chat.isRunning"
-        :config-tip="canSend ? '' : '请先配置 Base URL / Model；API Key 可写在页面或服务端 .env'"
-        @send="chat.send"
-        @stop="chat.stop"
-      />
-    </main>
+      <main class="main">
+        <div v-if="chat.statusText || chat.errorText" class="status-bar" :class="{ error: !!chat.errorText }">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span>{{ chat.errorText || chat.statusText }}</span>
+        </div>
+
+        <MessageList :messages="chat.visibleMessages" />
+
+        <Composer
+          :disabled="!canSend"
+          :running="chat.isRunning"
+          :config-tip="canSend ? '' : '请先配置 Base URL / Model；API Key 可写在页面或服务端 .env'"
+          @send="chat.send"
+          @stop="chat.stop"
+        />
+      </main>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.layout {
-  display: grid;
-  grid-template-columns: 340px 1fr;
+.shell {
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   width: 100%;
   overflow: hidden;
-  background: transparent;
   color: var(--text);
 }
 
-.layout > :deep(*) {
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  flex-shrink: 0;
+  min-height: 60px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-xs);
+  z-index: 5;
+}
+
+.topbar__left {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+}
+
+.titles {
+  min-width: 0;
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
+}
+
+.titles h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.titles p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+
+.topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.save-tip {
+  font-size: 12px;
+  color: var(--info-text);
+  background: var(--info-soft);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-pill);
+  padding: 6px 10px;
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn {
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  min-height: 36px;
+}
+
+.btn.ghost {
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-soft) 80%, transparent);
+  color: var(--text);
+}
+
+.btn.ghost:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
+  transform: translateY(-1px);
+}
+
+.btn.ghost.save:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.btn.ghost.save:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--accent));
+  color: var(--text-on-accent);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.shell-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  overflow: hidden;
+}
+
+.shell-body > :deep(*) {
   min-height: 0;
 }
 
@@ -141,120 +252,79 @@ async function saveReport() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: color-mix(in srgb, var(--bg-elevated) 55%, transparent);
 }
 
-.topbar {
+.status-bar {
   display: flex;
-  justify-content: space-between;
-  gap: 16px;
   align-items: center;
+  gap: 8px;
   flex-shrink: 0;
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel) 88%, transparent);
-  backdrop-filter: blur(14px);
-  box-shadow: var(--shadow-xs);
-}
-
-.topbar__left {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  min-width: 0;
-}
-
-.topbar h1 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-
-.topbar p {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.topbar__actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.save-tip {
-  font-size: 12px;
-  color: var(--info-text);
-  background: var(--info-soft);
+  margin: 12px 16px 0;
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--info-border);
-  border-radius: 999px;
-  padding: 4px 10px;
-  white-space: nowrap;
+  background: var(--info-soft);
+  color: var(--info-text);
+  font-size: 13px;
+  animation: fade-up 0.35s var(--ease-out) both;
+}
+
+.status-bar.error {
+  border-color: var(--error-border);
+  background: var(--error-soft);
+  color: var(--error-text);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 0 currentColor;
+  animation: signal-glow 1.8s ease-out infinite;
+  flex-shrink: 0;
 }
 
 .tip-enter-active,
 .tip-leave-active {
-  transition: opacity 0.2s ease;
+  transition:
+    opacity var(--duration-normal) var(--ease-out),
+    transform var(--duration-normal) var(--ease-out);
 }
 
 .tip-enter-from,
 .tip-leave-to {
   opacity: 0;
+  transform: translateY(-4px);
 }
 
-.ghost {
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel) 80%, transparent);
-  color: var(--text);
-  border-radius: var(--radius-md);
-  padding: 8px 12px;
-  cursor: pointer;
-}
+@media (max-width: 1100px) {
+  .titles {
+    display: none;
+  }
 
-.ghost:hover:not(:disabled) {
-  border-color: var(--border-hover);
-  background: var(--surface-hover);
-}
-
-.ghost:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.ghost.save:not(:disabled) {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  color: var(--accent);
-  background: var(--accent-soft);
-  font-weight: 600;
-}
-
-.ghost.save:not(:disabled):hover {
-  background: color-mix(in srgb, var(--accent-soft) 70%, var(--accent));
-  color: var(--accent-hover);
-}
-
-.status-bar {
-  flex-shrink: 0;
-  padding: 8px 24px;
-  font-size: 13px;
-  color: var(--info-text);
-  background: var(--info-soft);
-  border-bottom: 1px solid var(--info-border);
-  border-radius: 0;
-}
-
-.status-bar.error {
-  color: var(--error-text);
-  background: var(--error-soft);
-  border-bottom-color: var(--error-border);
-}
-
-@media (max-width: 960px) {
-  .layout {
+  .shell-body {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(240px, 40vh) 1fr;
-    height: 100vh;
-    overflow: hidden;
+    grid-template-rows: auto 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    padding: 10px 12px;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .topbar__actions {
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    min-height: 40px;
   }
 }
 </style>

@@ -139,9 +139,10 @@ function displayContent(message: ChatMessageItem): string {
 <template>
   <div ref="scroller" class="list">
     <div v-if="!messages.length" class="empty">
+      <div class="empty__badge">Signal Lab</div>
       <h3>开始一次 AI 浏览器检测</h3>
       <p>
-        在右侧输入测试目标，例如：「打开目标页，检查首页布局、核心交互和接口错误，并输出问题报告」。
+        在下方输入测试目标，例如：「打开目标页，检查首页布局、核心交互和接口错误，并输出问题报告」。
       </p>
       <ul>
         <li>流式输出思考与结论</li>
@@ -220,107 +221,180 @@ function displayContent(message: ChatMessageItem): string {
 
 <style scoped>
 .list {
-  flex: 1 1 auto;
+  flex: 1;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 24px;
+  overflow: auto;
+  padding: 18px 20px 12px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .empty {
   margin: auto;
-  max-width: 520px;
-  text-align: left;
-  padding: 28px;
-  border: 1px dashed var(--border-strong);
+  max-width: 560px;
+  width: 100%;
+  border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   background:
-    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 10%, transparent), transparent 50%),
-    var(--panel);
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 14%, transparent), transparent 42%),
+    radial-gradient(circle at bottom right, color-mix(in srgb, var(--accent-secondary) 12%, transparent), transparent 48%),
+    color-mix(in srgb, var(--panel) 92%, transparent);
   box-shadow: var(--shadow-sm);
+  padding: 28px 26px;
+  animation: fade-up 0.5s var(--ease-out) both;
+}
+
+.empty__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.empty__badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .empty h3 {
   margin: 0 0 8px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
-.empty p,
+.empty p {
+  margin: 0 0 14px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.empty ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
 .empty li {
-  color: var(--muted);
-  line-height: 1.6;
+  position: relative;
+  padding: 10px 12px 10px 34px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-soft) 80%, transparent);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.empty li::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
 }
 
 .message {
-  max-width: min(820px, 100%);
-  padding: 14px 16px;
-  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
-  background: var(--panel);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  padding: 14px 16px;
   box-shadow: var(--shadow-xs);
-  animation: message-in var(--duration-normal) var(--ease-out);
-}
-
-@keyframes message-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  animation: fade-up 0.35s var(--ease-out) both;
 }
 
 .message.user {
-  align-self: flex-end;
-  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 60%),
+    color-mix(in srgb, var(--panel) 94%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
 }
 
 .message.assistant {
-  align-self: flex-start;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
 }
 
 .meta {
   display: flex;
-  gap: 10px;
   align-items: center;
-  margin-bottom: 8px;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 
 .role {
   font-size: 12px;
   font-weight: 700;
-  color: var(--muted);
-  text-transform: uppercase;
   letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
-.streaming {
-  font-size: 12px;
+.message.user .role {
   color: var(--accent);
 }
 
+.message.assistant .role {
+  color: var(--accent-secondary);
+}
+
+.streaming {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--info-text);
+  background: var(--info-soft);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+  animation: pulse-soft 1.4s ease-in-out infinite;
+}
+
+.content {
+  font-size: 14px;
+  line-height: 1.7;
+  word-break: break-word;
+  color: var(--text);
+}
 
 .attachments {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-top: 10px;
 }
 
 .attachment {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   border: 1px solid var(--info-border);
   background: var(--info-soft);
+  color: var(--info-text);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  font-size: 12px;
 }
 
 .attachment__badge {
@@ -330,8 +404,7 @@ function displayContent(message: ChatMessageItem): string {
   color: var(--text-on-accent);
   font-size: 11px;
   font-weight: 700;
-  padding: 3px 8px;
-  line-height: 1.4;
+  padding: 2px 8px;
 }
 
 .attachment__meta {
@@ -342,39 +415,27 @@ function displayContent(message: ChatMessageItem): string {
 }
 
 .attachment__meta strong {
-  font-size: 13px;
-  color: var(--info-text);
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .attachment__meta span {
-  font-size: 12px;
   color: var(--muted);
+  font-size: 11px;
 }
 
-.content {
-  line-height: 1.7;
-  font-size: 14px;
-  overflow-wrap: anywhere;
+.markdown-body :deep(p) {
+  margin: 0.55em 0;
 }
 
-.markdown-body :deep(:first-child) {
+.markdown-body :deep(p:first-child) {
   margin-top: 0;
 }
 
-.markdown-body :deep(:last-child) {
+.markdown-body :deep(p:last-child) {
   margin-bottom: 0;
-}
-
-.markdown-body :deep(p),
-.markdown-body :deep(ul),
-.markdown-body :deep(ol),
-.markdown-body :deep(blockquote),
-.markdown-body :deep(pre),
-.markdown-body :deep(table) {
-  margin: 0 0 0.85em;
 }
 
 .markdown-body :deep(h1),
@@ -386,19 +447,12 @@ function displayContent(message: ChatMessageItem): string {
   margin: 1em 0 0.5em;
   line-height: 1.35;
   font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
-.markdown-body :deep(h1) {
-  font-size: 1.35em;
-}
-
-.markdown-body :deep(h2) {
-  font-size: 1.2em;
-}
-
-.markdown-body :deep(h3) {
-  font-size: 1.08em;
-}
+.markdown-body :deep(h1) { font-size: 1.35em; }
+.markdown-body :deep(h2) { font-size: 1.2em; }
+.markdown-body :deep(h3) { font-size: 1.08em; }
 
 .markdown-body :deep(ul),
 .markdown-body :deep(ol) {
@@ -423,11 +477,11 @@ function displayContent(message: ChatMessageItem): string {
 }
 
 .markdown-body :deep(code) {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.92em;
   padding: 0.12em 0.35em;
   border-radius: 6px;
-  background: color-mix(in srgb, var(--panel-soft) 70%, var(--border));
+  background: var(--code-inline-bg);
 }
 
 .markdown-body :deep(pre) {
@@ -438,6 +492,7 @@ function displayContent(message: ChatMessageItem): string {
   overflow: auto;
   font-size: 12px;
   line-height: 1.5;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
 .markdown-body :deep(pre code) {
@@ -479,11 +534,11 @@ function displayContent(message: ChatMessageItem): string {
 }
 
 .tools {
-  margin-top: 10px;
+  margin-top: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--panel-soft) 88%, transparent);
-  overflow: visible;
+  overflow: hidden;
 }
 
 .tools-head {
@@ -491,7 +546,7 @@ function displayContent(message: ChatMessageItem): string {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel-soft) 70%, var(--panel) 8%);
 }
@@ -499,7 +554,7 @@ function displayContent(message: ChatMessageItem): string {
 .tools-title {
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -514,8 +569,9 @@ function displayContent(message: ChatMessageItem): string {
   justify-content: center;
   font-size: 11px;
   font-weight: 700;
-  color: var(--muted);
-  background: color-mix(in srgb, var(--border) 55%, transparent);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .tools-list {
@@ -526,14 +582,11 @@ function displayContent(message: ChatMessageItem): string {
   padding: 0 0 20px;
   scroll-padding-bottom: 20px;
   scrollbar-gutter: stable;
-  border-bottom-left-radius: 12px;
-  border-bottom-right-radius: 12px;
 }
 
 .tool {
   border: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: 0;
   background: transparent;
   padding: 0;
   scroll-margin-bottom: 16px;
@@ -549,7 +602,7 @@ function displayContent(message: ChatMessageItem): string {
 }
 
 .tool.error {
-  background: color-mix(in srgb, var(--error-border) 28%, transparent);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
 }
 
 summary {
@@ -558,7 +611,7 @@ summary {
   grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 8px 12px;
   font-size: 12px;
   line-height: 1.35;
   list-style: none;
@@ -579,6 +632,7 @@ summary::-webkit-details-marker {
   font-weight: 700;
   color: var(--muted);
   background: color-mix(in srgb, var(--border) 60%, transparent);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
 
 .tool-main {
@@ -590,9 +644,10 @@ summary::-webkit-details-marker {
 
 .tool-name {
   flex: 0 0 auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   font-weight: 600;
+  color: var(--text);
 }
 
 .tool-summary-inline {
@@ -613,6 +668,7 @@ summary::-webkit-details-marker {
 
 .tool-status.running {
   color: var(--accent);
+  animation: pulse-soft 1.3s ease-in-out infinite;
 }
 
 .tool-status.error,
@@ -621,7 +677,7 @@ summary::-webkit-details-marker {
 }
 
 .tool-body {
-  padding: 0 10px 12px 36px;
+  padding: 0 12px 12px 38px;
 }
 
 .code {
@@ -634,6 +690,8 @@ summary::-webkit-details-marker {
   max-height: 180px;
   font-size: 11px;
   line-height: 1.45;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .code:last-child {

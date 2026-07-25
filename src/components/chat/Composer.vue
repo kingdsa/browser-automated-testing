@@ -203,13 +203,12 @@ async function onDrop(event: DragEvent) {
 </template>
 
 <style scoped>
-
 .composer {
   flex-shrink: 0;
   border-top: 1px solid var(--border);
   padding: 14px 18px 18px;
   background: color-mix(in srgb, var(--panel) 88%, transparent);
-  backdrop-filter: blur(14px);
+  backdrop-filter: blur(12px);
 }
 
 .presets {
@@ -225,32 +224,35 @@ async function onDrop(event: DragEvent) {
   background: var(--panel-soft);
   color: var(--text-secondary);
   border-radius: var(--radius-pill);
-  padding: 6px 12px;
+  padding: 7px 12px;
   font-size: 12px;
   cursor: pointer;
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background-color var(--duration-fast) var(--ease-out),
     color var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
+    transform var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
 }
 
 .chip:hover {
-  border-color: var(--border-strong);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
   background: var(--accent-soft);
   color: var(--accent);
   transform: translateY(-1px);
+  box-shadow: var(--shadow-xs);
 }
 
 .box {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--input);
-  padding: 10px;
+  padding: 12px;
   box-shadow: var(--shadow-sm);
   transition:
     border-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
+    box-shadow var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
 }
 
 .box:focus-within {
@@ -297,7 +299,7 @@ textarea {
   color: var(--text);
   outline: none;
   font: inherit;
-  line-height: 1.65;
+  line-height: 1.7;
 }
 
 .attach {
@@ -394,11 +396,13 @@ textarea {
   cursor: pointer;
   font-size: 13px;
   white-space: nowrap;
+  min-height: 36px;
 }
 
 .ghost:hover:not(:disabled) {
   border-color: var(--border-hover);
   background: var(--surface-hover);
+  transform: translateY(-1px);
 }
 
 .ghost:disabled {
@@ -424,15 +428,18 @@ button.primary,
 button.danger {
   border: none;
   border-radius: var(--radius-md);
-  padding: 10px 14px;
+  padding: 10px 16px;
   cursor: pointer;
   font-weight: 600;
+  min-height: 40px;
 }
 
 button.primary {
-  background: var(--accent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 92%, white), var(--accent));
   color: var(--text-on-accent);
-  box-shadow: var(--shadow-sm);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, white 18%, transparent) inset,
+    0 8px 18px rgba(var(--accent-rgb), 0.22);
 }
 
 button.primary:hover:not(:disabled) {
@@ -444,6 +451,7 @@ button.primary:hover:not(:disabled) {
 button.primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 button.danger {
@@ -454,6 +462,7 @@ button.danger {
 
 button.danger:hover {
   background: color-mix(in srgb, var(--error-soft) 70%, var(--error-border));
+  transform: translateY(-1px);
 }
 
 @media (max-width: 860px) {
@@ -469,6 +478,11 @@ button.danger:hover {
   .buttons {
     justify-content: flex-end;
   }
-}
 
+  button.primary,
+  button.danger,
+  .ghost {
+    min-height: 44px;
+  }
+}
 </style>

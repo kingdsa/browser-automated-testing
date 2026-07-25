@@ -43,29 +43,29 @@ function createMindMap() {
     theme: 'default',
     themeConfig: {
       backgroundColor: 'transparent',
-      lineColor: '#2F9B8A',
-      generalizationLineColor: '#3BA7C9',
+      lineColor: '#2EE6A8',
+      generalizationLineColor: '#8B9CFF',
       root: {
-        fillColor: '#2F9B8A',
-        color: '#ffffff',
+        fillColor: '#2EE6A8',
+        color: '#04130E',
         borderRadius: 12,
-        fontFamily: 'Plus Jakarta Sans, Noto Sans SC, sans-serif',
+        fontFamily: 'Sora, Noto Sans SC, sans-serif',
       },
       second: {
-        fillColor: '#E3F5F0',
-        color: '#1C2B33',
-        borderColor: '#B7DDD2',
+        fillColor: '#1B2330',
+        color: '#E8EEF7',
+        borderColor: 'rgba(46, 230, 168, 0.35)',
         borderWidth: 1,
         borderRadius: 10,
-        fontFamily: 'Plus Jakarta Sans, Noto Sans SC, sans-serif',
+        fontFamily: 'Sora, Noto Sans SC, sans-serif',
       },
       node: {
-        fillColor: '#FFFFFF',
-        color: '#1C2B33',
-        borderColor: '#D7EBE4',
+        fillColor: '#121820',
+        color: '#E8EEF7',
+        borderColor: 'rgba(148, 163, 184, 0.22)',
         borderWidth: 1,
         borderRadius: 10,
-        fontFamily: 'Plus Jakarta Sans, Noto Sans SC, sans-serif',
+        fontFamily: 'Sora, Noto Sans SC, sans-serif',
       },
     },
     mousewheelAction: 'zoom',
@@ -175,11 +175,12 @@ watch(
   border-radius: var(--radius-lg);
   overflow: hidden;
   background:
-    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 12%, transparent), transparent 42%),
-    radial-gradient(circle at bottom right, color-mix(in srgb, var(--accent-secondary) 10%, transparent), transparent 45%),
-    var(--panel);
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 14%, transparent), transparent 42%),
+    radial-gradient(circle at bottom right, color-mix(in srgb, var(--accent-secondary) 12%, transparent), transparent 45%),
+    color-mix(in srgb, var(--panel) 94%, transparent);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
+  animation: fade-up 0.4s var(--ease-out) both;
 }
 
 .mindmap-el {

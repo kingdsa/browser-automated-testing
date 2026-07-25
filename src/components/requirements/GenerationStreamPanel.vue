@@ -187,9 +187,10 @@ function jumpToLatest() {
   flex-direction: column;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
   overflow: hidden;
   box-shadow: var(--shadow-sm);
+  animation: fade-up 0.4s var(--ease-out) both;
 }
 
 .stream-panel__head {
@@ -276,7 +277,8 @@ function jumpToLatest() {
 }
 
 .message.user {
-  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
 }
 
 .message.system {
@@ -304,6 +306,7 @@ function jumpToLatest() {
   border: 1px solid var(--info-border);
   border-radius: 999px;
   padding: 1px 8px;
+  animation: pulse-soft 1.4s ease-in-out infinite;
 }
 
 .content {
@@ -320,7 +323,7 @@ function jumpToLatest() {
   border-radius: var(--radius-md);
   background: var(--code-bg);
   color: var(--code-text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -340,7 +343,7 @@ function jumpToLatest() {
 }
 
 .content :deep(code) {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
 }
 
