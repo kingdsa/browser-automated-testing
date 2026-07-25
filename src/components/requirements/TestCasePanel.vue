@@ -200,9 +200,10 @@ function moveCase(index: number, delta: number) {
   flex-direction: column;
   gap: 12px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
 
 .panel__head {
@@ -246,7 +247,7 @@ function moveCase(index: number, delta: number) {
 .empty {
   margin: 0 14px 14px;
   border: 1px dashed var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   padding: 40px 16px;
   text-align: center;
   color: var(--muted);
@@ -265,12 +266,20 @@ function moveCase(index: number, delta: number) {
 
 .case-card {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--panel-soft);
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.case-card:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-xs);
 }
 
 .case-card__head {
@@ -361,7 +370,7 @@ select {
   border: 1px solid var(--border);
   background: var(--input);
   color: var(--text);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 8px 10px;
   outline: none;
   font: inherit;
@@ -375,7 +384,7 @@ select:focus {
 
 .ghost,
 .mini {
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -395,9 +404,9 @@ select:focus {
 }
 
 .mini.danger {
-  color: #b42318;
-  border-color: #fecdca;
-  background: #fef3f2;
+  color: var(--error-text);
+  border-color: var(--error-border);
+  background: var(--error-soft);
 }
 
 @media (max-width: 1100px) {

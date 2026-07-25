@@ -236,9 +236,12 @@ function displayContent(message: ChatMessageItem): string {
   max-width: 520px;
   text-align: left;
   padding: 28px;
-  border: 1px dashed var(--border);
-  border-radius: 18px;
-  background: var(--panel-soft);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 10%, transparent), transparent 50%),
+    var(--panel);
+  box-shadow: var(--shadow-sm);
 }
 
 .empty h3 {
@@ -254,9 +257,22 @@ function displayContent(message: ChatMessageItem): string {
 .message {
   max-width: min(820px, 100%);
   padding: 14px 16px;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--panel);
+  box-shadow: var(--shadow-xs);
+  animation: message-in var(--duration-normal) var(--ease-out);
+}
+
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .message.user {
@@ -287,6 +303,55 @@ function displayContent(message: ChatMessageItem): string {
 .streaming {
   font-size: 12px;
   color: var(--accent);
+}
+
+
+.attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.attachment {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--info-border);
+  background: var(--info-soft);
+}
+
+.attachment__badge {
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  line-height: 1.4;
+}
+
+.attachment__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.attachment__meta strong {
+  font-size: 13px;
+  color: var(--info-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment__meta span {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .content {
@@ -362,14 +427,14 @@ function displayContent(message: ChatMessageItem): string {
   font-size: 0.92em;
   padding: 0.12em 0.35em;
   border-radius: 6px;
-  background: color-mix(in srgb, var(--panel-soft) 70%, #cbd5e1);
+  background: color-mix(in srgb, var(--panel-soft) 70%, var(--border));
 }
 
 .markdown-body :deep(pre) {
   padding: 10px 12px;
-  border-radius: 10px;
-  background: #0f172a;
-  color: #e2e8f0;
+  border-radius: var(--radius-md);
+  background: var(--code-bg);
+  color: var(--code-text);
   overflow: auto;
   font-size: 12px;
   line-height: 1.5;
@@ -410,13 +475,13 @@ function displayContent(message: ChatMessageItem): string {
 
 .markdown-body :deep(img) {
   max-width: 100%;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 
 .tools {
   margin-top: 10px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--panel-soft) 88%, transparent);
   overflow: visible;
 }
@@ -428,7 +493,7 @@ function displayContent(message: ChatMessageItem): string {
   gap: 8px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel-soft) 70%, #fff 8%);
+  background: color-mix(in srgb, var(--panel-soft) 70%, var(--panel) 8%);
 }
 
 .tools-title {
@@ -484,7 +549,7 @@ function displayContent(message: ChatMessageItem): string {
 }
 
 .tool.error {
-  background: color-mix(in srgb, #fecdca 28%, transparent);
+  background: color-mix(in srgb, var(--error-border) 28%, transparent);
 }
 
 summary {
@@ -552,7 +617,7 @@ summary::-webkit-details-marker {
 
 .tool-status.error,
 .tool.error .tool-status {
-  color: #d92d20;
+  color: var(--error-text);
 }
 
 .tool-body {
@@ -562,9 +627,9 @@ summary::-webkit-details-marker {
 .code {
   margin: 0 0 8px;
   padding: 8px 10px;
-  border-radius: 8px;
-  background: #0f172a;
-  color: #e2e8f0;
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  color: var(--code-text);
   overflow: auto;
   max-height: 180px;
   font-size: 11px;
@@ -581,8 +646,8 @@ summary::-webkit-details-marker {
   max-width: 100%;
   max-height: 220px;
   object-fit: contain;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: #0f172a;
+  background: var(--code-bg);
 }
 </style>

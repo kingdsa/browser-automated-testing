@@ -126,7 +126,7 @@ async function saveReport() {
   height: 100vh;
   width: 100%;
   overflow: hidden;
-  background: var(--bg);
+  background: transparent;
   color: var(--text);
 }
 
@@ -149,9 +149,11 @@ async function saveReport() {
   gap: 16px;
   align-items: center;
   flex-shrink: 0;
-  padding: 18px 24px;
+  padding: 16px 24px;
   border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-xs);
 }
 
 .topbar__left {
@@ -164,6 +166,8 @@ async function saveReport() {
 .topbar h1 {
   margin: 0;
   font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .topbar p {
@@ -180,9 +184,9 @@ async function saveReport() {
 
 .save-tip {
   font-size: 12px;
-  color: #175cd3;
-  background: #eff8ff;
-  border: 1px solid #b2ddff;
+  color: var(--info-text);
+  background: var(--info-soft);
+  border: 1px solid var(--info-border);
   border-radius: 999px;
   padding: 4px 10px;
   white-space: nowrap;
@@ -200,11 +204,16 @@ async function saveReport() {
 
 .ghost {
   border: 1px solid var(--border);
-  background: transparent;
+  background: color-mix(in srgb, var(--panel) 80%, transparent);
   color: var(--text);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 8px 12px;
   cursor: pointer;
+}
+
+.ghost:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
 }
 
 .ghost:disabled {
@@ -215,22 +224,29 @@ async function saveReport() {
 .ghost.save:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   color: var(--accent);
+  background: var(--accent-soft);
   font-weight: 600;
+}
+
+.ghost.save:not(:disabled):hover {
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--accent));
+  color: var(--accent-hover);
 }
 
 .status-bar {
   flex-shrink: 0;
   padding: 8px 24px;
   font-size: 13px;
-  color: #175cd3;
-  background: #eff8ff;
-  border-bottom: 1px solid #b2ddff;
+  color: var(--info-text);
+  background: var(--info-soft);
+  border-bottom: 1px solid var(--info-border);
+  border-radius: 0;
 }
 
 .status-bar.error {
-  color: #b42318;
-  background: #fef3f2;
-  border-bottom-color: #fecdca;
+  color: var(--error-text);
+  background: var(--error-soft);
+  border-bottom-color: var(--error-border);
 }
 
 @media (max-width: 960px) {

@@ -203,12 +203,13 @@ async function onDrop(event: DragEvent) {
 </template>
 
 <style scoped>
+
 .composer {
   flex-shrink: 0;
   border-top: 1px solid var(--border);
   padding: 14px 18px 18px;
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(14px);
 }
 
 .presets {
@@ -222,24 +223,45 @@ async function onDrop(event: DragEvent) {
   flex-shrink: 0;
   border: 1px solid var(--border);
   background: var(--panel-soft);
-  color: var(--text);
-  border-radius: 999px;
+  color: var(--text-secondary);
+  border-radius: var(--radius-pill);
   padding: 6px 12px;
   font-size: 12px;
   cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.chip:hover {
+  border-color: var(--border-strong);
+  background: var(--accent-soft);
+  color: var(--accent);
+  transform: translateY(-1px);
 }
 
 .box {
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--input);
   padding: 10px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.box:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
 }
 
 .box--drag {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: var(--shadow-focus);
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--input));
 }
 
 .tips {
@@ -251,19 +273,19 @@ async function onDrop(event: DragEvent) {
 
 .tip {
   margin: 0;
-  color: #b54708;
-  background: #fffaeb;
-  border: 1px solid #fedf89;
-  border-radius: 10px;
+  color: var(--warning-text);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-md);
   padding: 8px 10px;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .tip--error {
-  color: #b42318;
-  background: #fef3f2;
-  border-color: #fecdca;
+  color: var(--error-text);
+  background: var(--error-soft);
+  border-color: var(--error-border);
 }
 
 textarea {
@@ -275,7 +297,7 @@ textarea {
   color: var(--text);
   outline: none;
   font: inherit;
-  line-height: 1.6;
+  line-height: 1.65;
 }
 
 .attach {
@@ -285,9 +307,9 @@ textarea {
   gap: 12px;
   margin-top: 8px;
   padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid #b2ddff;
-  background: #eff8ff;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--info-border);
+  background: var(--info-soft);
 }
 
 .attach__main {
@@ -299,9 +321,9 @@ textarea {
 
 .attach__badge {
   flex-shrink: 0;
-  border-radius: 999px;
-  background: #1570ef;
-  color: #fff;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--text-on-accent);
   font-size: 11px;
   font-weight: 700;
   padding: 3px 8px;
@@ -317,7 +339,7 @@ textarea {
 
 .attach__meta strong {
   font-size: 13px;
-  color: #175cd3;
+  color: var(--info-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -325,18 +347,23 @@ textarea {
 
 .attach__meta span {
   font-size: 12px;
-  color: #52606d;
+  color: var(--muted);
 }
 
 .attach__remove {
   flex-shrink: 0;
-  border: 1px solid #d0d5dd;
-  background: #fff;
-  color: #344054;
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
   padding: 6px 10px;
   cursor: pointer;
   font-size: 12px;
+}
+
+.attach__remove:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
 }
 
 .actions {
@@ -362,11 +389,16 @@ textarea {
   border: 1px solid var(--border);
   background: var(--panel-soft);
   color: var(--text);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 8px 12px;
   cursor: pointer;
   font-size: 13px;
   white-space: nowrap;
+}
+
+.ghost:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
 }
 
 .ghost:disabled {
@@ -391,7 +423,7 @@ textarea {
 button.primary,
 button.danger {
   border: none;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 10px 14px;
   cursor: pointer;
   font-weight: 600;
@@ -399,7 +431,14 @@ button.danger {
 
 button.primary {
   background: var(--accent);
-  color: white;
+  color: var(--text-on-accent);
+  box-shadow: var(--shadow-sm);
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 
 button.primary:disabled {
@@ -408,8 +447,13 @@ button.primary:disabled {
 }
 
 button.danger {
-  background: #fee4e2;
-  color: #b42318;
+  background: var(--error-soft);
+  color: var(--error-text);
+  border: 1px solid var(--error-border);
+}
+
+button.danger:hover {
+  background: color-mix(in srgb, var(--error-soft) 70%, var(--error-border));
 }
 
 @media (max-width: 860px) {
@@ -426,4 +470,5 @@ button.danger {
     justify-content: flex-end;
   }
 }
+
 </style>

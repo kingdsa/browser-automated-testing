@@ -865,7 +865,7 @@ function addFeature() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg);
+  background: transparent;
   color: var(--text);
 }
 
@@ -876,7 +876,9 @@ function addFeature() {
   align-items: center;
   padding: 14px 20px;
   border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-xs);
   flex-shrink: 0;
 }
 
@@ -890,6 +892,8 @@ function addFeature() {
 .titles h1 {
   margin: 0;
   font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .titles p {
@@ -918,7 +922,8 @@ function addFeature() {
   min-height: 0;
   overflow: auto;
   border-right: 1px solid var(--border);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(10px);
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -944,9 +949,10 @@ function addFeature() {
 
 .card {
   border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--panel-soft);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
   padding: 14px;
+  box-shadow: var(--shadow-xs);
 }
 
 .card__head {
@@ -989,15 +995,21 @@ function addFeature() {
 
 .upload {
   border: 1.5px dashed color-mix(in srgb, var(--accent) 40%, var(--border));
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   padding: 22px 14px;
   text-align: center;
   cursor: pointer;
-  background: color-mix(in srgb, var(--accent) 4%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
 }
 
 .upload:hover {
   border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .upload__icon {
@@ -1054,7 +1066,7 @@ select {
   border: 1px solid var(--border);
   background: var(--input);
   color: var(--text);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 10px 12px;
   outline: none;
 }
@@ -1062,7 +1074,8 @@ select {
 textarea:focus,
 input:focus,
 select:focus {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
 }
 
 .llm-row {
@@ -1085,7 +1098,7 @@ select:focus {
 .ghost,
 .mini-btn,
 .delete-btn {
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 9px 12px;
   cursor: pointer;
 }
@@ -1099,16 +1112,31 @@ select:focus {
 
 .primary {
   background: var(--accent);
-  color: white;
+  color: var(--text-on-accent);
   font-weight: 600;
+  box-shadow: var(--shadow-sm);
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 
 .secondary {
   margin-top: 8px;
-  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  background: var(--accent-soft);
   color: var(--accent);
   border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
   font-weight: 600;
+}
+
+.secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--accent));
 }
 
 .primary:disabled,
@@ -1125,6 +1153,12 @@ select:focus {
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
+}
+
+.ghost:hover:not(:disabled),
+.mini-btn:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
 }
 
 .mini-btn {
@@ -1152,15 +1186,15 @@ select:focus {
   font-size: 12px;
   padding: 4px 10px;
   border-radius: 999px;
-  background: #eff8ff;
-  color: #175cd3;
-  border: 1px solid #b2ddff;
+  background: var(--info-soft);
+  color: var(--info-text);
+  border: 1px solid var(--info-border);
 }
 
 .badge--case {
-  background: #ecfdf3;
-  color: #067647;
-  border-color: #abefc6;
+  background: var(--success-soft);
+  color: var(--success-text);
+  border-color: var(--success-border);
 }
 
 .feature-list {
@@ -1173,7 +1207,7 @@ select:focus {
 
 .feature-item {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 10px;
   background: var(--panel);
 }
@@ -1190,9 +1224,9 @@ select:focus {
 }
 
 .delete-btn {
-  border: 1px solid #fecdca;
-  background: #fef3f2;
-  color: #b42318;
+  border: 1px solid var(--error-border);
+  background: var(--error-soft);
+  color: var(--error-text);
   padding: 6px 10px;
   font-size: 12px;
   white-space: nowrap;
@@ -1215,27 +1249,28 @@ select:focus {
 
 .tag {
   font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: #ecfdf3;
-  color: #067647;
-  border: 1px solid #abefc6;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--success-soft);
+  color: var(--success-text);
+  border: 1px solid var(--success-border);
+  font-weight: 600;
 }
 
 .status {
   flex-shrink: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 8px 12px;
   font-size: 13px;
-  background: #eff8ff;
-  color: #175cd3;
-  border: 1px solid #b2ddff;
+  background: var(--info-soft);
+  color: var(--info-text);
+  border: 1px solid var(--info-border);
 }
 
 .status.error {
-  background: #fef3f2;
-  color: #b42318;
-  border-color: #fecdca;
+  background: var(--error-soft);
+  color: var(--error-text);
+  border-color: var(--error-border);
 }
 
 .tips {

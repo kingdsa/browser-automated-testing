@@ -35,13 +35,22 @@ const route = useRoute()
 
 .brand {
   font-weight: 700;
-  font-size: 14px;
-  letter-spacing: 0.04em;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--accent);
   text-decoration: none;
-  padding: 4px 8px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.brand:hover {
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--accent));
+  transform: translateY(-1px);
 }
 
 .links {
@@ -54,21 +63,25 @@ const route = useRoute()
   text-decoration: none;
   color: var(--muted);
   font-size: 13px;
-  padding: 6px 10px;
-  border-radius: 999px;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
   border: 1px solid transparent;
-  transition: 0.15s ease;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
 }
 
 .link:hover {
   color: var(--text);
   background: var(--panel-soft);
+  border-color: var(--border);
 }
 
 .link.active {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  background: var(--accent-soft);
   font-weight: 600;
 }
 </style>

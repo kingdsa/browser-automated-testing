@@ -234,6 +234,7 @@ onMounted(refreshMeta)
 </template>
 
 <style scoped>
+
 .panel {
   display: flex;
   flex-direction: column;
@@ -244,8 +245,10 @@ onMounted(refreshMeta)
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
   border-right: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-xs);
 }
 
 .panel__header {
@@ -258,6 +261,8 @@ onMounted(refreshMeta)
 .panel__header h2 {
   margin: 0;
   font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .section {
@@ -266,14 +271,23 @@ onMounted(refreshMeta)
   gap: 10px;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--panel-soft);
+  box-shadow: var(--shadow-xs);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.section:hover {
+  border-color: var(--border-hover);
 }
 
 .section h3 {
   margin: 0;
-  font-size: 13px;
-  letter-spacing: 0.04em;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -307,36 +321,40 @@ input[type='password'],
 input[type='number'] {
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 14px;
   padding: 10px 12px;
   background: var(--input);
   color: var(--text);
   outline: none;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
 }
 
 input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+  box-shadow: var(--shadow-focus);
 }
 
 .badge {
   flex-shrink: 0;
   padding: 4px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 12px;
+  font-weight: 600;
   border: 1px solid var(--border);
 }
 
 .badge.ok {
-  color: #067647;
-  background: #ecfdf3;
-  border-color: #abefc6;
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: var(--success-border);
 }
 
 .badge.down {
-  color: #b42318;
-  background: #fef3f2;
-  border-color: #fecdca;
+  color: var(--error-text);
+  background: var(--error-soft);
+  border-color: var(--error-border);
 }
 
 .badge.unknown {
@@ -355,54 +373,67 @@ input:focus {
 
 .skill-list li {
   padding: 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--input);
   border: 1px solid var(--border);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.skill-list li:hover {
+  border-color: var(--border-hover);
 }
 
 .skill-list p {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .ghost {
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 4px 10px;
   cursor: pointer;
+}
+
+.ghost:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
 }
 
 .muted {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .hint {
   margin: 0;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.55;
   color: var(--muted);
 }
 
 select {
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 14px;
   padding: 10px 12px;
   background: var(--input);
   color: var(--text);
   outline: none;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
 }
 
 select:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+  box-shadow: var(--shadow-focus);
 }
 
 .advanced {
@@ -417,6 +448,10 @@ select:focus {
   color: var(--muted);
   font-size: 12px;
   user-select: none;
+}
+
+.advanced summary:hover {
+  color: var(--accent);
 }
 
 .tab-list {
@@ -437,15 +472,21 @@ select:focus {
   gap: 2px;
   text-align: left;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 10px;
   background: var(--input);
   color: var(--text);
   cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
 }
 
 .tab-item:hover {
   border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
 }
 
 .tab-item strong {
@@ -460,4 +501,5 @@ select:focus {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 </style>

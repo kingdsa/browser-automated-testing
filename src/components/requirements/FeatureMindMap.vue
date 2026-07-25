@@ -41,6 +41,33 @@ function createMindMap() {
     readonly: props.readonly,
     layout: 'logicalStructure',
     theme: 'default',
+    themeConfig: {
+      backgroundColor: 'transparent',
+      lineColor: '#2F9B8A',
+      generalizationLineColor: '#3BA7C9',
+      root: {
+        fillColor: '#2F9B8A',
+        color: '#ffffff',
+        borderRadius: 12,
+        fontFamily: 'Plus Jakarta Sans, Noto Sans SC, sans-serif',
+      },
+      second: {
+        fillColor: '#E3F5F0',
+        color: '#1C2B33',
+        borderColor: '#B7DDD2',
+        borderWidth: 1,
+        borderRadius: 10,
+        fontFamily: 'Plus Jakarta Sans, Noto Sans SC, sans-serif',
+      },
+      node: {
+        fillColor: '#FFFFFF',
+        color: '#1C2B33',
+        borderColor: '#D7EBE4',
+        borderWidth: 1,
+        borderRadius: 10,
+        fontFamily: 'Plus Jakarta Sans, Noto Sans SC, sans-serif',
+      },
+    },
     mousewheelAction: 'zoom',
     mousewheelZoomActionReverse: true,
     textAutoWrapWidth: 220,
@@ -145,12 +172,14 @@ watch(
   width: 100%;
   height: 100%;
   min-height: 420px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   background:
-    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 8%, transparent), transparent 40%),
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 12%, transparent), transparent 42%),
+    radial-gradient(circle at bottom right, color-mix(in srgb, var(--accent-secondary) 10%, transparent), transparent 45%),
     var(--panel);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
 }
 
 .mindmap-el {

@@ -186,9 +186,10 @@ function jumpToLatest() {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
 
 .stream-panel__head {
@@ -198,7 +199,7 @@ function jumpToLatest() {
   align-items: center;
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--accent) 4%, var(--panel));
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
 }
 
 .stream-panel__head h2 {
@@ -220,16 +221,16 @@ function jumpToLatest() {
 
 .stop,
 .ghost {
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 8px 12px;
   cursor: pointer;
   font-size: 13px;
 }
 
 .stop {
-  border: 1px solid #fecdca;
-  background: #fef3f2;
-  color: #b42318;
+  border: 1px solid var(--error-border);
+  background: var(--error-soft);
+  color: var(--error-text);
   font-weight: 600;
 }
 
@@ -241,18 +242,18 @@ function jumpToLatest() {
 
 .stream-status {
   margin: 12px 16px 0;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 8px 12px;
   font-size: 13px;
-  background: #eff8ff;
-  color: #175cd3;
-  border: 1px solid #b2ddff;
+  background: var(--info-soft);
+  color: var(--info-text);
+  border: 1px solid var(--info-border);
 }
 
 .stream-status.error {
-  background: #fef3f2;
-  color: #b42318;
-  border-color: #fecdca;
+  background: var(--error-soft);
+  color: var(--error-text);
+  border-color: var(--error-border);
 }
 
 .stream-list {
@@ -269,7 +270,7 @@ function jumpToLatest() {
 
 .message {
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 12px 14px;
   background: var(--panel-soft);
 }
@@ -279,8 +280,8 @@ function jumpToLatest() {
 }
 
 .message.system {
-  background: #fffbeb;
-  border-color: #fde68a;
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
 }
 
 .meta {
@@ -298,9 +299,9 @@ function jumpToLatest() {
 
 .streaming {
   font-size: 12px;
-  color: #175cd3;
-  background: #eff8ff;
-  border: 1px solid #b2ddff;
+  color: var(--info-text);
+  background: var(--info-soft);
+  border: 1px solid var(--info-border);
   border-radius: 999px;
   padding: 1px 8px;
 }
@@ -316,9 +317,9 @@ function jumpToLatest() {
   overflow: auto;
   margin: 0;
   padding: 12px;
-  border-radius: 10px;
-  background: #0b1220;
-  color: #e5eefc;
+  border-radius: var(--radius-md);
+  background: var(--code-bg);
+  color: var(--code-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
   font-size: 12px;
   line-height: 1.55;
@@ -332,9 +333,9 @@ function jumpToLatest() {
   overflow: auto;
   margin: 0;
   padding: 12px;
-  border-radius: 10px;
-  background: #0b1220;
-  color: #e5eefc;
+  border-radius: var(--radius-md);
+  background: var(--code-bg);
+  color: var(--code-text);
   overscroll-behavior: contain;
 }
 
@@ -348,18 +349,18 @@ function jumpToLatest() {
   left: 50%;
   bottom: 18px;
   transform: translateX(-50%);
-  border: 1px solid #b2ddff;
-  background: #eff8ff;
-  color: #175cd3;
+  border: 1px solid var(--info-border);
+  background: var(--info-soft);
+  color: var(--info-text);
   border-radius: 999px;
   padding: 8px 14px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
+  box-shadow: var(--shadow-float);
 }
 
 .jump-latest:hover {
-  background: #d1e9ff;
+  background: var(--info-border);
 }
 </style>
