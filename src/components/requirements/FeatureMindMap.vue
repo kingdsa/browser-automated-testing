@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import MindMap from 'simple-mind-map'
-import 'simple-mind-map/dist/simpleMindMap.esm.css'
+import type MindMap from 'simple-mind-map'
 import type { MindMapNode } from '@/types/requirements'
 
 const props = withDefaults(
@@ -31,11 +30,19 @@ function emptyRoot(): MindMapNode {
   }
 }
 
-function createMindMap() {
+async function createMindMap() {
   if (!containerRef.value) return
   destroyMindMap()
 
-  mindMap = new MindMap({
+  const [{ default: MindMapCtor }] = await Promise.all([
+    import('simple-mind-map'),
+    import('simple-mind-map/dist/simpleMindMap.esm.css'),
+  ])
+
+  // Component may have unmounted while the heavy library was loading.
+  if (!containerRef.value) return
+
+  mindMap = new MindMapCtor({
     el: containerRef.value,
     data: props.modelValue || emptyRoot(),
     readonly: props.readonly,

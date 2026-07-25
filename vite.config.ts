@@ -6,10 +6,44 @@ import vueDevTools from 'vite-plugin-vue-devtools'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [vue(), vueDevTools()],
+  plugins: [
+    vue(),
+    // Keep Vue DevTools out of production bundles.
+    process.env.NODE_ENV !== 'production' && vueDevTools(),
+  ].filter(Boolean),
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'vue-vendor',
+              test: /node_modules[\\/](vue|vue-router|pinia)([\\/]|$)/,
+              priority: 20,
+            },
+            {
+              name: 'mind-map',
+              test: /node_modules[\\/]simple-mind-map([\\/]|$)/,
+              priority: 30,
+            },
+            {
+              name: 'markdown',
+              test: /node_modules[\\/](marked|dompurify)([\\/]|$)/,
+              priority: 20,
+            },
+            {
+              name: 'vendor',
+              test: /node_modules[\\/]/,
+              priority: 10,
+            },
+          ],
+        },
+      },
     },
   },
   server: {
