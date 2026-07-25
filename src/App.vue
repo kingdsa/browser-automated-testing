@@ -3,5 +3,9 @@ import { RouterView } from 'vue-router'
 </script>
 
 <template>
-  <RouterView />
+  <RouterView v-slot="{ Component }">
+    <keep-alive :include="['HomeView', 'RequirementsView']">
+      <component :is="Component" />
+    </keep-alive>
+  </RouterView>
 </template>

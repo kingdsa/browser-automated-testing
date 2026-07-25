@@ -14,6 +14,8 @@ import { useSettingsStore } from '@/stores/settings'
 import type { GenerationMessage, GenerateTestCasesResult, MindMapNode, RequirementAnalysisResult, TestCase } from '@/types/requirements'
 import { defaultTestCaseExportName, downloadTextFile, testCasesToMarkdown } from '@/utils/testCases'
 
+defineOptions({ name: 'RequirementsView' })
+
 const settings = useSettingsStore()
 const serverHasKey = ref(false)
 

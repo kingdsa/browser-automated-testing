@@ -9,6 +9,8 @@ import { computed, onMounted, ref } from 'vue'
 import { fetchDefaults } from '@/api/agent'
 import { defaultReportName, getLastAssistantMarkdown, saveMarkdownFile } from '@/utils/report'
 
+defineOptions({ name: 'HomeView' })
+
 const chat = useChatStore()
 const settings = useSettingsStore()
 const serverHasKey = ref(false)

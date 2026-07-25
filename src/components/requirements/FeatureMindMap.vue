@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type MindMap from 'simple-mind-map'
 import type { MindMapNode } from '@/types/requirements'
 
@@ -136,6 +136,15 @@ onMounted(async () => {
     })
     resizeObserver.observe(containerRef.value)
   }
+})
+
+onActivated(async () => {
+  await nextTick()
+  mindMap?.resize?.()
+  window.requestAnimationFrame(() => {
+    mindMap?.resize?.()
+    mindMap?.view?.fit?.()
+  })
 })
 
 onBeforeUnmount(() => {
