@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, reactive, ref, watch } from 'vue'
 import type { GenerationMessage } from '@/types/requirements'
 import { renderMarkdown } from '@/utils/markdown'
 
@@ -19,6 +19,7 @@ const emit = defineEmits<{
 
 const scroller = ref<HTMLElement | null>(null)
 const streamBodyRefs = new Map<string, HTMLElement>()
+const collapsedMessageIds = reactive(new Set<string>())
 const pinnedToBottom = ref(true)
 const BOTTOM_THRESHOLD = 80
 
@@ -39,6 +40,15 @@ function onListScroll() {
 function setStreamBody(messageId: string, el: Element | null) {
   if (el instanceof HTMLElement) streamBodyRefs.set(messageId, el)
   else streamBodyRefs.delete(messageId)
+}
+
+function isCollapsed(messageId: string) {
+  return collapsedMessageIds.has(messageId)
+}
+
+function toggleMessage(messageId: string) {
+  if (collapsedMessageIds.has(messageId)) collapsedMessageIds.delete(messageId)
+  else collapsedMessageIds.add(messageId)
 }
 
 function scrollToBottom(force = false) {
@@ -148,22 +158,35 @@ function jumpToLatest() {
         v-for="message in messages"
         :key="message.id"
         class="message"
-        :class="message.role"
+        :class="[message.role, { collapsed: isCollapsed(message.id) }]"
       >
-        <div class="meta">
-          <span class="role">{{ roleLabel(message) }}</span>
-          <span v-if="message.streaming" class="streaming">输出中...</span>
-        </div>
+        <button
+          type="button"
+          class="meta"
+          :aria-expanded="!isCollapsed(message.id)"
+          :title="isCollapsed(message.id) ? '展开内容' : '收起内容'"
+          @click="toggleMessage(message.id)"
+        >
+          <span class="meta__labels">
+            <span class="role">{{ roleLabel(message) }}</span>
+            <span v-if="message.streaming" class="streaming">输出中...</span>
+          </span>
+          <span class="collapse-icon" aria-hidden="true" />
+        </button>
 
         <pre
-          v-if="isRawAssistant(message) && (message.content || message.streaming)"
+          v-if="
+            !isCollapsed(message.id) &&
+            isRawAssistant(message) &&
+            (message.content || message.streaming)
+          "
           class="raw-output"
           :ref="(el) => setStreamBody(message.id, el as Element | null)"
           @scroll.passive="onStreamBodyScroll"
-        >{{ assistantText(message) }}</pre>
+          >{{ assistantText(message) }}</pre>
 
         <div
-          v-else-if="message.content || message.streaming"
+          v-else-if="!isCollapsed(message.id) && (message.content || message.streaming)"
           class="content markdown-body"
           :ref="(el) => setStreamBody(message.id, el as Element | null)"
           v-html="formatMarkdown(message)"
@@ -172,12 +195,7 @@ function jumpToLatest() {
       </article>
     </div>
 
-    <button
-      v-if="!pinnedToBottom"
-      type="button"
-      class="jump-latest"
-      @click="jumpToLatest"
-    >
+    <button v-if="!pinnedToBottom" type="button" class="jump-latest" @click="jumpToLatest">
       回到最新
     </button>
   </section>
@@ -302,12 +320,41 @@ function jumpToLatest() {
   flex: 1 1 0;
 }
 
+.message.collapsed {
+  flex: 0 0 auto;
+}
+
 .meta {
+  width: 100%;
   flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.message.collapsed .meta {
+  margin-bottom: 0;
+}
+
+.meta:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.meta__labels {
+  min-width: 0;
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-bottom: 8px;
 }
 
 .role {
@@ -324,6 +371,38 @@ function jumpToLatest() {
   border-radius: 999px;
   padding: 1px 8px;
   animation: pulse-soft 1.4s ease-in-out infinite;
+}
+
+.collapse-icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
+}
+
+.collapse-icon::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.16s ease;
+}
+
+.message.collapsed .collapse-icon::before {
+  transform: translateX(-2px) rotate(-45deg);
+}
+
+.meta:hover .collapse-icon {
+  background: var(--panel);
+  color: var(--text);
 }
 
 .content {
