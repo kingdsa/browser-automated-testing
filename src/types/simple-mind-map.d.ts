@@ -17,6 +17,7 @@ declare module 'simple-mind-map' {
     on<TArgs extends unknown[]>(event: string, callback: (...args: TArgs) => void): void
     off<TArgs extends unknown[]>(event: string, callback: (...args: TArgs) => void): void
     setData(data: unknown): void
+    updateData(data: unknown): void
     setMode(mode: 'readonly' | 'edit'): void
     getData(withConfig?: boolean): unknown
     resize(): void
