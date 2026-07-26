@@ -17,6 +17,7 @@ declare module 'simple-mind-map' {
     on(event: string, callback: (...args: any[]) => void): void
     off(event: string, callback: (...args: any[]) => void): void
     setData(data: unknown): void
+    setMode(mode: 'readonly' | 'edit'): void
     getData(withConfig?: boolean): unknown
     resize(): void
     destroy(): void
@@ -24,7 +25,7 @@ declare module 'simple-mind-map' {
       fit?: () => void
       getTransformData?: () => unknown
       setTransformData?: (data: unknown) => void
-    }
+    };
     [key: string]: any
   }
 }

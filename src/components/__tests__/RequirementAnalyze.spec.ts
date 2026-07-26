@@ -58,11 +58,14 @@ describe('streamAnalyzeRequirementDocument', () => {
     const types = events.map((event) => event.type)
     const firstReasoning = types.indexOf('reasoning')
     const firstDelta = types.indexOf('delta')
+    const firstMindMap = types.indexOf('mindmap')
     const resultEvent = types.indexOf('result')
 
     expect(createCompletion).toHaveBeenCalledTimes(2)
     expect(firstReasoning).toBeGreaterThan(-1)
     expect(firstDelta).toBeGreaterThan(firstReasoning)
+    expect(firstMindMap).toBeGreaterThan(firstDelta)
+    expect(resultEvent).toBeGreaterThan(firstMindMap)
     expect(resultEvent).toBeGreaterThan(firstDelta)
     expect(result.title).toBe('账号系统')
     expect(result.featureCount).toBe(1)
@@ -73,5 +76,10 @@ describe('streamAnalyzeRequirementDocument', () => {
       .join('')
     expect(() => JSON.parse(jsonOutput)).not.toThrow()
     expect(jsonOutput).not.toContain('正在识别核心流程')
+
+    const mapSnapshots = events
+      .filter((event) => event.type === 'mindmap')
+      .map((event) => event.data as { featureCount: number })
+    expect(mapSnapshots[mapSnapshots.length - 1]?.featureCount).toBe(1)
   })
 })

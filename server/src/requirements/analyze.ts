@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import { z } from 'zod'
 import type { LlmSettings } from '../types/index.js'
+import { StreamingMindMapParser, type MindMapProgressSnapshot } from './streamMindMap.js'
 
 export interface MindMapNodeData {
   text: string
@@ -25,6 +26,7 @@ export type RequirementStreamEvent =
   | { type: 'status'; data: { message: string } }
   | { type: 'reasoning'; data: { content: string } }
   | { type: 'delta'; data: { content: string } }
+  | { type: 'mindmap'; data: MindMapProgressSnapshot }
   | { type: 'result'; data: RequirementAnalysisResult }
   | { type: 'error'; data: { message: string } }
   | { type: 'done'; data: Record<string, never> }
@@ -71,7 +73,10 @@ function sanitizeNode(node: MindMapNode, depth = 0): MindMapNode {
   const text = String(node.data?.text || '').trim() || (depth === 0 ? '需求功能点' : '未命名功能')
   const note = node.data?.note?.trim()
   const tag = Array.isArray(node.data?.tag)
-    ? node.data.tag.map((item) => String(item).trim()).filter(Boolean).slice(0, 5)
+    ? node.data.tag
+        .map((item) => String(item).trim())
+        .filter(Boolean)
+        .slice(0, 5)
     : undefined
   const children = Array.isArray(node.children)
     ? node.children.map((child) => sanitizeNode(child, depth + 1))
@@ -197,7 +202,6 @@ function createClient(llm: LlmSettings) {
   })
 }
 
-
 function createAbortError(message = '已取消生成') {
   const error = new Error(message)
   error.name = 'AbortError'
@@ -210,9 +214,7 @@ function isAbortError(error: unknown, signal?: AbortSignal) {
   const name = String((error as { name?: string }).name || '')
   const message = String((error as { message?: string }).message || '')
   return (
-    name === 'AbortError' ||
-    name === 'APIUserAbortError' ||
-    /aborted|abort|cancel/i.test(message)
+    name === 'AbortError' || name === 'APIUserAbortError' || /aborted|abort|cancel/i.test(message)
   )
 }
 
@@ -223,7 +225,11 @@ function assertLlmReady(llm: LlmSettings, content: string) {
   if (!content.trim()) throw new Error('需求文档内容为空')
 }
 
-function parseAnalysisResult(raw: string, fileName: string, content: string): RequirementAnalysisResult {
+function parseAnalysisResult(
+  raw: string,
+  fileName: string,
+  content: string,
+): RequirementAnalysisResult {
   if (!raw.trim()) throw new Error('模型未返回分析结果')
 
   let parsed: unknown
@@ -354,6 +360,9 @@ export async function streamAnalyzeRequirementDocument(input: {
     )
 
     let raw = ''
+    const progressiveParser = new StreamingMindMapParser((snapshot) => {
+      emit({ type: 'mindmap', data: snapshot })
+    })
     for await (const chunk of jsonStream) {
       if (signal?.aborted) throw createAbortError()
       const choiceDelta = chunk.choices?.[0]?.delta
@@ -367,6 +376,7 @@ export async function streamAnalyzeRequirementDocument(input: {
       if (!choiceDelta.content) continue
       raw += choiceDelta.content
       emit({ type: 'delta', data: { content: choiceDelta.content } })
+      progressiveParser.write(choiceDelta.content)
     }
 
     if (signal?.aborted) throw createAbortError()

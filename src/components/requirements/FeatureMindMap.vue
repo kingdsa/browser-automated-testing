@@ -107,7 +107,6 @@ function applyData(data: MindMapNode | null) {
   applyingExternal = true
   try {
     mindMap.setData(data)
-    mindMap.view?.fit?.()
   } finally {
     // allow internal events to settle
     window.setTimeout(() => {
@@ -167,8 +166,8 @@ watch(
 
 watch(
   () => props.readonly,
-  () => {
-    createMindMap()
+  (readonly) => {
+    mindMap?.setMode?.(readonly ? 'readonly' : 'edit')
   },
 )
 </script>
@@ -191,8 +190,16 @@ watch(
   border-radius: var(--radius-lg);
   overflow: hidden;
   background:
-    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 14%, transparent), transparent 42%),
-    radial-gradient(circle at bottom right, color-mix(in srgb, var(--accent-secondary) 12%, transparent), transparent 45%),
+    radial-gradient(
+      circle at top left,
+      color-mix(in srgb, var(--accent) 14%, transparent),
+      transparent 42%
+    ),
+    radial-gradient(
+      circle at bottom right,
+      color-mix(in srgb, var(--accent-secondary) 12%, transparent),
+      transparent 45%
+    ),
     color-mix(in srgb, var(--panel) 94%, transparent);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-sm);

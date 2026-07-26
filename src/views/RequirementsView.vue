@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import AppNav from '@/components/requirements/AppNav.vue'
 import FeatureMindMap from '@/components/requirements/FeatureMindMap.vue'
 import GenerationStreamPanel from '@/components/requirements/GenerationStreamPanel.vue'
@@ -11,7 +11,14 @@ import {
 } from '@/api/requirements'
 import { fetchDefaults } from '@/api/agent'
 import { useSettingsStore } from '@/stores/settings'
-import type { GenerationMessage, GenerateTestCasesResult, MindMapNode, RequirementAnalysisResult, TestCase } from '@/types/requirements'
+import type {
+  GenerationMessage,
+  GenerateTestCasesResult,
+  MindMapNode,
+  MindMapProgressSnapshot,
+  RequirementAnalysisResult,
+  TestCase,
+} from '@/types/requirements'
 import { defaultTestCaseExportName, downloadTextFile, testCasesToMarkdown } from '@/utils/testCases'
 
 defineOptions({ name: 'RequirementsView' })
@@ -48,8 +55,11 @@ const generationMessages = ref<GenerationMessage[]>([])
 const generationRunning = ref(false)
 const generationStatus = ref('')
 const generationError = ref('')
+const progressiveMapVisible = ref(false)
 let generationAbort: AbortController | null = null
 let generationSeq = 0
+let progressiveMapTimer: ReturnType<typeof setTimeout> | null = null
+let pendingProgressiveMap: MindMapProgressSnapshot | null = null
 
 const canAnalyze = computed(() => {
   const llm = settings.settings.llm
@@ -65,16 +75,19 @@ const canGenerateCases = computed(() => {
   const hasKey = Boolean(llm.apiKey) || serverHasKey.value
   return Boolean(
     mindMapData.value &&
-      featureList.value.length > 0 &&
-      llm.baseUrl &&
-      hasKey &&
-      llm.model &&
-      !generatingCases.value &&
-      !analyzing.value,
+    featureList.value.length > 0 &&
+    llm.baseUrl &&
+    hasKey &&
+    llm.model &&
+    !generatingCases.value &&
+    !analyzing.value,
   )
 })
 
 const featureList = computed(() => flattenFeatures(mindMapData.value))
+const showTextGenerationPanel = computed(
+  () => showGenerationPanel.value && !progressiveMapVisible.value,
+)
 
 onMounted(async () => {
   try {
@@ -84,6 +97,11 @@ onMounted(async () => {
   } catch {
     serverHasKey.value = false
   }
+})
+
+onBeforeUnmount(() => {
+  generationAbort?.abort()
+  cancelProgressiveMapUpdate()
 })
 
 function flattenFeatures(
@@ -159,6 +177,8 @@ function clearAll() {
   generationMessages.value = []
   generationStatus.value = ''
   generationError.value = ''
+  progressiveMapVisible.value = false
+  cancelProgressiveMapUpdate()
 }
 
 function uid(prefix: string) {
@@ -176,6 +196,8 @@ function llmPayload() {
 
 function beginGeneration(kind: 'analyze' | 'cases', userText: string, assistantPlaceholder = '') {
   stopGeneration(false)
+  cancelProgressiveMapUpdate()
+  progressiveMapVisible.value = false
   generationAbort = new AbortController()
   generationKind.value = kind
   showGenerationPanel.value = true
@@ -238,7 +260,9 @@ function finishAssistant(content?: string, kind?: GenerationMessage['kind']) {
 }
 
 function finishAllAssistants(fallback?: string) {
-  for (const assistant of generationMessages.value.filter((message) => message.role === 'assistant')) {
+  for (const assistant of generationMessages.value.filter(
+    (message) => message.role === 'assistant',
+  )) {
     assistant.streaming = false
     if (!assistant.content) assistant.content = fallback || '本次没有生成文本输出。'
   }
@@ -250,6 +274,7 @@ function stopGeneration(updateUi = true) {
     generationAbort = null
   }
   if (!updateUi) return
+  flushProgressiveMapUpdate()
   generationRunning.value = false
   analyzing.value = false
   generatingCases.value = false
@@ -262,6 +287,8 @@ function stopGeneration(updateUi = true) {
 function dismissGenerationPanel() {
   if (generationRunning.value) stopGeneration(true)
   showGenerationPanel.value = false
+  progressiveMapVisible.value = false
+  cancelProgressiveMapUpdate()
 }
 
 const generationPanelTitle = computed(() => {
@@ -276,6 +303,56 @@ const generationPanelSubtitle = computed(() => {
   if (generationStatus.value.includes('取消')) return '已取消，可返回结果页'
   return '生成完成，可返回查看结果'
 })
+
+function applyProgressiveMap(snapshot: MindMapProgressSnapshot) {
+  const firstSnapshot = !progressiveMapVisible.value
+  if (firstSnapshot) {
+    progressiveMapVisible.value = true
+    testCases.value = []
+    testCaseTitle.value = ''
+    testCaseSummary.value = ''
+  }
+
+  mindMapData.value = snapshot.root
+  title.value = snapshot.title || snapshot.root.data.text
+  summary.value = snapshot.summary
+  featureCount.value = snapshot.featureCount
+  mainTab.value = 'map'
+  generationStatus.value = `正在绘制功能点导图：已生成 ${snapshot.featureCount} 个功能点...`
+  statusText.value = generationStatus.value
+}
+
+function queueProgressiveMap(snapshot: MindMapProgressSnapshot) {
+  if (!progressiveMapVisible.value) {
+    applyProgressiveMap(snapshot)
+    return
+  }
+
+  pendingProgressiveMap = snapshot
+  if (progressiveMapTimer) return
+  progressiveMapTimer = setTimeout(() => {
+    progressiveMapTimer = null
+    if (!pendingProgressiveMap) return
+    const next = pendingProgressiveMap
+    pendingProgressiveMap = null
+    applyProgressiveMap(next)
+  }, 120)
+}
+
+function cancelProgressiveMapUpdate() {
+  if (progressiveMapTimer) clearTimeout(progressiveMapTimer)
+  progressiveMapTimer = null
+  pendingProgressiveMap = null
+}
+
+function flushProgressiveMapUpdate() {
+  if (progressiveMapTimer) clearTimeout(progressiveMapTimer)
+  progressiveMapTimer = null
+  if (!pendingProgressiveMap) return
+  const next = pendingProgressiveMap
+  pendingProgressiveMap = null
+  applyProgressiveMap(next)
+}
 
 async function runAnalyze() {
   if (!canAnalyze.value) return
@@ -316,9 +393,14 @@ async function runAnalyze() {
             appendAssistantDelta(String(payload.content || ''), 'result')
             generationStatus.value = '模型正在输出功能点 JSON...'
             statusText.value = generationStatus.value
+          } else if (type === 'mindmap') {
+            const snapshot = payload as unknown as MindMapProgressSnapshot
+            if (!snapshot?.root || !isMindMapNode(snapshot.root)) return
+            queueProgressiveMap(snapshot)
           } else if (type === 'result') {
             const result = payload as unknown as RequirementAnalysisResult
             if (!result?.root) return
+            cancelProgressiveMapUpdate()
             gotResult = true
             mindMapData.value = result.root
             title.value = result.title
@@ -341,6 +423,7 @@ async function runAnalyze() {
     finishAllAssistants()
     if (gotResult) {
       showGenerationPanel.value = false
+      progressiveMapVisible.value = false
       await nextTick()
       await nextFrame()
       mindMapRef.value?.fit()
@@ -484,7 +567,11 @@ function exportTestCases(format: 'md' | 'json') {
       cases: testCases.value,
       exportedAt: new Date().toISOString(),
     }
-    downloadTextFile(JSON.stringify(payload, null, 2), `${baseName}.json`, 'application/json;charset=utf-8')
+    downloadTextFile(
+      JSON.stringify(payload, null, 2),
+      `${baseName}.json`,
+      'application/json;charset=utf-8',
+    )
     statusText.value = `已导出 JSON：${baseName}.json`
     return
   }
@@ -603,10 +690,18 @@ async function onJsonFileChange(event: Event) {
           <div class="card__head">
             <h2>1. 输入需求</h2>
             <div class="tabs">
-              <button type="button" :class="{ active: activeTab === 'upload' }" @click="activeTab = 'upload'">
+              <button
+                type="button"
+                :class="{ active: activeTab === 'upload' }"
+                @click="activeTab = 'upload'"
+              >
                 上传文件
               </button>
-              <button type="button" :class="{ active: activeTab === 'text' }" @click="activeTab = 'text'">
+              <button
+                type="button"
+                :class="{ active: activeTab === 'text' }"
+                @click="activeTab = 'text'"
+              >
                 粘贴文本
               </button>
             </div>
@@ -623,7 +718,9 @@ async function onJsonFileChange(event: Event) {
             <div class="upload__icon">↑</div>
             <div class="upload__title">点击选择需求文档</div>
             <div class="upload__desc">支持 Markdown / TXT / DOCX</div>
-            <div v-if="selectedFile || fileName" class="upload__file">{{ selectedFile?.name || fileName }}</div>
+            <div v-if="selectedFile || fileName" class="upload__file">
+              {{ selectedFile?.name || fileName }}
+            </div>
           </div>
 
           <div v-else class="text-panel">
@@ -644,7 +741,10 @@ async function onJsonFileChange(event: Event) {
           <div class="llm-row">
             <label>
               <span>Base URL</span>
-              <input v-model="settings.settings.llm.baseUrl" placeholder="https://api.example.com/v1" />
+              <input
+                v-model="settings.settings.llm.baseUrl"
+                placeholder="https://api.example.com/v1"
+              />
             </label>
             <label>
               <span>Model</span>
@@ -690,17 +790,33 @@ async function onJsonFileChange(event: Event) {
       <main class="main">
         <div class="main-toolbar">
           <div class="tabs main-tabs">
-            <button type="button" :class="{ active: mainTab === 'map' }" @click="mainTab = 'map'">功能点导图</button>
-            <button type="button" :class="{ active: mainTab === 'cases' }" @click="mainTab = 'cases'">
+            <button type="button" :class="{ active: mainTab === 'map' }" @click="mainTab = 'map'">
+              功能点导图
+            </button>
+            <button
+              type="button"
+              :class="{ active: mainTab === 'cases' }"
+              @click="mainTab = 'cases'"
+            >
               测试用例{{ testCases.length ? ` (${testCases.length})` : '' }}
             </button>
           </div>
           <div class="main-toolbar__actions">
             <template v-if="mainTab === 'map'">
-              <button type="button" class="ghost" :disabled="!mindMapData" @click="readonlyMap = !readonlyMap">
+              <button
+                type="button"
+                class="ghost"
+                :disabled="!mindMapData || analyzing"
+                @click="readonlyMap = !readonlyMap"
+              >
                 {{ readonlyMap ? '启用编辑' : '只读预览' }}
               </button>
-              <button type="button" class="ghost" :disabled="!mindMapData" @click="mindMapRef?.fit()">
+              <button
+                type="button"
+                class="ghost"
+                :disabled="!mindMapData"
+                @click="mindMapRef?.fit()"
+              >
                 适应画布
               </button>
               <button type="button" class="ghost" @click="onPickJson">导入 JSON</button>
@@ -711,7 +827,9 @@ async function onJsonFileChange(event: Event) {
                 accept=".json,application/json"
                 @change="onJsonFileChange"
               />
-              <button type="button" class="ghost" :disabled="!mindMapData" @click="downloadJson">导出功能点</button>
+              <button type="button" class="ghost" :disabled="!mindMapData" @click="downloadJson">
+                导出功能点
+              </button>
             </template>
             <template v-else>
               <button
@@ -722,22 +840,36 @@ async function onJsonFileChange(event: Event) {
               >
                 {{ generatingCases ? '取消生成' : '生成测试用例' }}
               </button>
-              <button type="button" class="ghost" :disabled="!testCases.length" @click="exportTestCases('md')">
+              <button
+                type="button"
+                class="ghost"
+                :disabled="!testCases.length"
+                @click="exportTestCases('md')"
+              >
                 导出 MD
               </button>
-              <button type="button" class="ghost" :disabled="!testCases.length" @click="exportTestCases('json')">
+              <button
+                type="button"
+                class="ghost"
+                :disabled="!testCases.length"
+                @click="exportTestCases('json')"
+              >
                 导出 JSON
               </button>
             </template>
           </div>
         </div>
 
-        <div v-if="(statusText || errorText) && !showGenerationPanel" class="status" :class="{ error: !!errorText }">
+        <div
+          v-if="(statusText || errorText) && !showGenerationPanel"
+          class="status"
+          :class="{ error: !!errorText }"
+        >
           {{ errorText || statusText }}
         </div>
 
         <GenerationStreamPanel
-          v-if="showGenerationPanel"
+          v-if="showTextGenerationPanel"
           :title="generationPanelTitle"
           :subtitle="generationPanelSubtitle"
           :messages="generationMessages"
@@ -749,11 +881,34 @@ async function onJsonFileChange(event: Event) {
         />
 
         <template v-else>
+          <section
+            v-if="showGenerationPanel && progressiveMapVisible"
+            class="map-stream-status"
+            :class="{ error: !!generationError }"
+          >
+            <div class="map-stream-status__summary">
+              <span v-if="generationRunning" class="map-stream-status__pulse" aria-hidden="true" />
+              <div>
+                <strong>{{
+                  generationError ? '导图生成遇到问题' : 'AI 正在绘制功能点导图'
+                }}</strong>
+                <span>{{ generationError || generationStatus }}</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              :class="generationRunning ? 'stream-stop' : 'ghost'"
+              @click="generationRunning ? stopGeneration(true) : dismissGenerationPanel()"
+            >
+              {{ generationRunning ? '取消生成' : '返回结果' }}
+            </button>
+          </section>
+
           <FeatureMindMap
             v-show="mainTab === 'map'"
             ref="mindMapRef"
             :model-value="mindMapData"
-            :readonly="readonlyMap"
+            :readonly="readonlyMap || (analyzing && progressiveMapVisible)"
             @update:model-value="onMindMapUpdate"
           />
 
@@ -767,13 +922,13 @@ async function onJsonFileChange(event: Event) {
             @update:summary="testCaseSummary = $event"
           />
 
-          <div v-if="mainTab === 'map'" class="tips">
+          <div v-if="mainTab === 'map' && !progressiveMapVisible" class="tips">
             <span>逻辑图布局（XMind 风格）</span>
             <span>双击节点可编辑文字</span>
             <span>左侧列表可删除功能点</span>
             <span>可导入/导出 JSON 思维导图</span>
           </div>
-          <div v-else class="tips">
+          <div v-else-if="mainTab === 'cases'" class="tips">
             <span>支持编辑标题、步骤、期望结果</span>
             <span>可新增/删除/排序用例</span>
             <span>导出 Markdown 或 JSON</span>
@@ -1239,6 +1394,84 @@ select:focus {
   border-color: var(--error-border);
 }
 
+.map-stream-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-shrink: 0;
+  min-height: 54px;
+  padding: 9px 12px;
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-md);
+  background: var(--info-soft);
+  color: var(--info-text);
+}
+
+.map-stream-status.error {
+  border-color: var(--error-border);
+  background: var(--error-soft);
+  color: var(--error-text);
+}
+
+.map-stream-status__summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.map-stream-status__summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.map-stream-status__summary strong {
+  font-size: 13px;
+}
+
+.map-stream-status__summary span:not(.map-stream-status__pulse) {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-stream-status__pulse {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0.45);
+  animation: map-stream-pulse 1.4s ease-out infinite;
+}
+
+.stream-stop {
+  flex-shrink: 0;
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-md);
+  background: var(--error-soft);
+  color: var(--error-text);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+@keyframes map-stream-pulse {
+  70% {
+    box-shadow: 0 0 0 7px rgba(var(--accent-rgb), 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0);
+  }
+}
+
 .workspace {
   flex: 1;
   min-height: 0;
@@ -1324,6 +1557,15 @@ select:focus {
   .main-toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .map-stream-status {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .map-stream-status__summary span:not(.map-stream-status__pulse) {
+    white-space: normal;
   }
 
   .ghost,

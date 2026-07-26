@@ -22,6 +22,13 @@ export interface RequirementAnalysisResult {
   error?: string
 }
 
+export interface MindMapProgressSnapshot {
+  title: string
+  summary: string
+  root: MindMapNode
+  featureCount: number
+}
+
 export interface FeaturePoint {
   path: string
   text: string
@@ -52,7 +59,6 @@ export interface GenerateTestCasesResult {
   caseCount: number
   error?: string
 }
-
 
 export interface GenerationMessage {
   id: string
