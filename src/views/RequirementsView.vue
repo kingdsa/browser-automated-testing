@@ -939,7 +939,7 @@ async function onTestCaseJsonFileChange(event: Event) {
 
         <template v-else>
           <section
-            v-if="showGenerationPanel && progressiveMapVisible"
+            v-if="mainTab === 'map' && showGenerationPanel && progressiveMapVisible"
             class="map-stream-status"
             :class="{ error: !!generationError }"
           >
@@ -962,7 +962,7 @@ async function onTestCaseJsonFileChange(event: Event) {
           </section>
 
           <FeatureMindMap
-            v-show="mainTab === 'map'"
+            v-if="mainTab === 'map'"
             ref="mindMapRef"
             :model-value="mindMapData"
             :readonly="readonlyMap || (analyzing && progressiveMapVisible)"
@@ -970,7 +970,7 @@ async function onTestCaseJsonFileChange(event: Event) {
           />
 
           <TestCasePanel
-            v-show="mainTab === 'cases'"
+            v-else
             v-model="testCases"
             :title="testCaseTitle"
             :summary="testCaseSummary"
