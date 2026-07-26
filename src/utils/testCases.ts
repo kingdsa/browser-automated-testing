@@ -1,6 +1,12 @@
 import type { TestCase } from '@/types/requirements'
 import { formatStamp } from '@/utils/report'
 
+export interface ImportedTestCases {
+  title: string
+  summary: string
+  cases: TestCase[]
+}
+
 export function defaultTestCaseExportName(title = 'test-cases', now = Date.now()): string {
   const safe = (title || 'test-cases').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40)
   return `${safe}-${formatStamp(now)}`
@@ -63,6 +69,74 @@ export function createEmptyTestCase(index = 0, feature = ''): TestCase {
     preconditions: '',
     steps: [''],
     expected: '',
+  }
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeImportedSteps(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    const steps = value.map((step) => String(step).trim()).filter(Boolean)
+    return steps.length ? steps : ['']
+  }
+
+  if (typeof value === 'string') {
+    const steps = value
+      .split(/\r?\n/)
+      .map((step) => step.replace(/^\s*\d+[.)、]\s*/, '').trim())
+      .filter(Boolean)
+    return steps.length ? steps : ['']
+  }
+
+  return ['']
+}
+
+export function normalizeImportedTestCases(raw: unknown): ImportedTestCases {
+  const isBareArray = Array.isArray(raw)
+  if (!isBareArray && (!raw || typeof raw !== 'object')) {
+    throw new Error('JSON 内容无效：需要测试用例对象或数组')
+  }
+
+  const payload = isBareArray ? {} : (raw as Record<string, unknown>)
+  const candidateCases = isBareArray ? raw : payload.cases
+  if (!Array.isArray(candidateCases)) {
+    throw new Error('JSON 格式不正确：未找到 cases 用例数组')
+  }
+  if (!candidateCases.length) {
+    throw new Error('JSON 中没有可导入的测试用例')
+  }
+
+  const priorities = new Set(['P0', 'P1', 'P2', 'P3'])
+  const cases = candidateCases.map((candidate, index): TestCase => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      throw new Error(`第 ${index + 1} 条测试用例格式不正确：需要对象结构`)
+    }
+
+    const item = candidate as Record<string, unknown>
+    const priority = stringValue(item.priority).toUpperCase()
+    const feature = stringValue(item.feature)
+    const note = stringValue(item.note)
+
+    return {
+      id: stringValue(item.id) || `TC-${String(index + 1).padStart(3, '0')}`,
+      feature,
+      featurePath: stringValue(item.featurePath) || feature,
+      title: stringValue(item.title) || `用例 ${index + 1}`,
+      priority: priorities.has(priority) ? (priority as TestCase['priority']) : 'P1',
+      type: stringValue(item.type) || '功能',
+      preconditions: stringValue(item.preconditions),
+      steps: normalizeImportedSteps(item.steps),
+      expected: stringValue(item.expected),
+      ...(note ? { note } : {}),
+    }
+  })
+
+  return {
+    title: stringValue(payload.title) || '导入的测试用例',
+    summary: stringValue(payload.summary),
+    cases,
   }
 }
 
@@ -146,4 +220,3 @@ export function formatAttachmentSize(size: number): string {
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
-

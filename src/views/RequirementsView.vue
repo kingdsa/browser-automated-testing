@@ -19,7 +19,12 @@ import type {
   RequirementAnalysisResult,
   TestCase,
 } from '@/types/requirements'
-import { defaultTestCaseExportName, downloadTextFile, testCasesToMarkdown } from '@/utils/testCases'
+import {
+  defaultTestCaseExportName,
+  downloadTextFile,
+  normalizeImportedTestCases,
+  testCasesToMarkdown,
+} from '@/utils/testCases'
 
 defineOptions({ name: 'RequirementsView' })
 
@@ -27,7 +32,8 @@ const settings = useSettingsStore()
 const serverHasKey = ref(false)
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
-const jsonInputRef = ref<HTMLInputElement | null>(null)
+const mindMapJsonInputRef = ref<HTMLInputElement | null>(null)
+const testCaseJsonInputRef = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const draftText = ref('')
 const fileName = ref('')
@@ -585,8 +591,12 @@ function exportTestCases(format: 'md' | 'json') {
   statusText.value = `已导出 Markdown：${baseName}.md`
 }
 
-function onPickJson() {
-  jsonInputRef.value?.click()
+function onPickMindMapJson() {
+  mindMapJsonInputRef.value?.click()
+}
+
+function onPickTestCaseJson() {
+  testCaseJsonInputRef.value?.click()
 }
 
 function isMindMapNode(value: unknown): value is MindMapNode {
@@ -598,7 +608,7 @@ function isMindMapNode(value: unknown): value is MindMapNode {
   return (node.children || []).every((child) => isMindMapNode(child))
 }
 
-function normalizeImportedPayload(raw: unknown): {
+function normalizeImportedMindMap(raw: unknown): {
   title: string
   summary: string
   root: MindMapNode
@@ -632,7 +642,7 @@ function normalizeImportedPayload(raw: unknown): {
   }
 }
 
-async function onJsonFileChange(event: Event) {
+async function onMindMapJsonFileChange(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0] || null
   errorText.value = ''
@@ -643,12 +653,12 @@ async function onJsonFileChange(event: Event) {
     const textContent = await file.text()
     let parsed: unknown
     try {
-      parsed = JSON.parse(textContent)
+      parsed = JSON.parse(textContent.replace(/^\uFEFF/, ''))
     } catch {
       throw new Error('无法解析 JSON 文件，请确认文件内容合法')
     }
 
-    const imported = normalizeImportedPayload(parsed)
+    const imported = normalizeImportedMindMap(parsed)
     mindMapData.value = imported.root
     title.value = imported.title
     summary.value = imported.summary
@@ -662,6 +672,35 @@ async function onJsonFileChange(event: Event) {
     await nextTick()
     await nextFrame()
     mindMapRef.value?.fit()
+  } catch (error) {
+    errorText.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    input.value = ''
+  }
+}
+
+async function onTestCaseJsonFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] || null
+  errorText.value = ''
+  statusText.value = ''
+  if (!file) return
+
+  try {
+    const textContent = await file.text()
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(textContent.replace(/^\uFEFF/, ''))
+    } catch {
+      throw new Error('无法解析测试用例 JSON，请确认文件内容合法')
+    }
+
+    const imported = normalizeImportedTestCases(parsed)
+    testCases.value = imported.cases
+    testCaseTitle.value = imported.title
+    testCaseSummary.value = imported.summary
+    mainTab.value = 'cases'
+    statusText.value = `已导入测试用例：${file.name}（${imported.cases.length} 条）`
   } catch (error) {
     errorText.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -820,19 +859,36 @@ async function onJsonFileChange(event: Event) {
               >
                 适应画布
               </button>
-              <button type="button" class="ghost" @click="onPickJson">导入 JSON</button>
+              <button type="button" class="ghost" @click="onPickMindMapJson">
+                导入功能点 JSON
+              </button>
               <input
-                ref="jsonInputRef"
+                ref="mindMapJsonInputRef"
                 class="hidden"
                 type="file"
                 accept=".json,application/json"
-                @change="onJsonFileChange"
+                @change="onMindMapJsonFileChange"
               />
               <button type="button" class="ghost" :disabled="!mindMapData" @click="downloadJson">
                 导出功能点
               </button>
             </template>
             <template v-else>
+              <button
+                type="button"
+                class="ghost"
+                :disabled="generatingCases || analyzing"
+                @click="onPickTestCaseJson"
+              >
+                导入用例 JSON
+              </button>
+              <input
+                ref="testCaseJsonInputRef"
+                class="hidden"
+                type="file"
+                accept=".json,application/json"
+                @change="onTestCaseJsonFileChange"
+              />
               <button
                 type="button"
                 class="ghost"
@@ -932,7 +988,7 @@ async function onJsonFileChange(event: Event) {
           <div v-else-if="mainTab === 'cases'" class="tips">
             <span>支持编辑标题、步骤、期望结果</span>
             <span>可新增/删除/排序用例</span>
-            <span>导出 Markdown 或 JSON</span>
+            <span>可导入 JSON，导出 Markdown 或 JSON</span>
           </div>
         </template>
       </main>
