@@ -23,6 +23,7 @@ export interface RequirementAnalysisResult {
 
 export type RequirementStreamEvent =
   | { type: 'status'; data: { message: string } }
+  | { type: 'reasoning'; data: { content: string } }
   | { type: 'delta'; data: { content: string } }
   | { type: 'result'; data: RequirementAnalysisResult }
   | { type: 'error'; data: { message: string } }
@@ -106,8 +107,29 @@ function fallbackTree(title: string, summary: string, source: string): MindMapNo
   }
 }
 
-function buildPrompt(fileName: string, content: string): string {
-  const clipped = content.length > 28000 ? `${content.slice(0, 28000)}\n\n...(内容过长，已截断)` : content
+function clipRequirement(content: string): string {
+  return content.length > 28000 ? `${content.slice(0, 28000)}\n\n...(内容过长，已截断)` : content
+}
+
+function buildReasoningPrompt(fileName: string, content: string): string {
+  return `请分析以下需求文档，输出一份供产品和测试人员阅读的简明分析过程。
+
+要求：
+1. 使用简洁 Markdown，按“需求目标、用户与主流程、功能模块、关键规则、异常与边界、待确认项”组织。
+2. 说明你如何从原文识别出可测试功能点，重点写判断依据和测试关注点。
+3. 不要输出 JSON，不要复述整份原文，不要使用空泛套话。
+4. 文档没有覆盖的内容要标记为“待确认”，不要自行编造。
+
+文件名：${fileName || '未命名需求文档'}
+
+需求文档内容：
+${clipRequirement(content)}`
+}
+
+function buildPrompt(fileName: string, content: string, reasoningSummary = ''): string {
+  const reasoningContext = reasoningSummary.trim()
+    ? `\n\n前置分析摘要（仅用于辅助结构化，不要原样输出）：\n${reasoningSummary.slice(0, 8000)}`
+    : ''
   return `请分析以下需求文档，提取产品功能点，并输出思维导图 JSON。
 
 要求：
@@ -134,7 +156,28 @@ function buildPrompt(fileName: string, content: string): string {
 文件名：${fileName || '未命名需求文档'}
 
 需求文档内容：
-${clipped}`
+${clipRequirement(content)}${reasoningContext}`
+}
+
+function extractCompatibleReasoning(delta: unknown): string {
+  if (!delta || typeof delta !== 'object') return ''
+  const record = delta as Record<string, unknown>
+  const candidate = record.reasoning_content ?? record.reasoning ?? record.thinking
+  if (typeof candidate === 'string') return candidate
+  if (!Array.isArray(candidate)) return ''
+
+  return candidate
+    .map((item) => {
+      if (typeof item === 'string') return item
+      if (!item || typeof item !== 'object') return ''
+      const part = item as Record<string, unknown>
+      return typeof part.text === 'string'
+        ? part.text
+        : typeof part.content === 'string'
+          ? part.content
+          : ''
+    })
+    .join('')
 }
 
 function createClient(llm: LlmSettings) {
@@ -247,10 +290,50 @@ export async function streamAnalyzeRequirementDocument(input: {
   if (signal?.aborted) throw createAbortError()
 
   const client = createClient(llm)
-  emit({ type: 'status', data: { message: '正在调用模型分析需求功能点...' } })
+  emit({ type: 'status', data: { message: 'AI 正在梳理需求目标、业务规则和测试边界...' } })
 
   try {
-    const stream = await client.chat.completions.create(
+    const reasoningStream = await client.chat.completions.create(
+      {
+        model: llm.model,
+        temperature: 0.2,
+        stream: true,
+        messages: [
+          {
+            role: 'system',
+            content:
+              '你是资深产品经理与测试分析师。请输出准确、简洁、可供用户审查的需求分析摘要，不要输出 JSON。',
+          },
+          {
+            role: 'user',
+            content: buildReasoningPrompt(fileName, content),
+          },
+        ],
+      },
+      { signal },
+    )
+
+    let reasoningSummary = ''
+    for await (const chunk of reasoningStream) {
+      if (signal?.aborted) throw createAbortError()
+      const choiceDelta = chunk.choices?.[0]?.delta
+      if (!choiceDelta) continue
+
+      const nativeReasoning = extractCompatibleReasoning(choiceDelta)
+      if (nativeReasoning) {
+        emit({ type: 'reasoning', data: { content: nativeReasoning } })
+      }
+
+      const contentDelta = choiceDelta.content
+      if (!contentDelta) continue
+      reasoningSummary += contentDelta
+      emit({ type: 'reasoning', data: { content: contentDelta } })
+    }
+
+    if (signal?.aborted) throw createAbortError()
+    emit({ type: 'status', data: { message: '分析过程完成，正在生成思维导图 JSON...' } })
+
+    const jsonStream = await client.chat.completions.create(
       {
         model: llm.model,
         temperature: 0.2,
@@ -263,7 +346,7 @@ export async function streamAnalyzeRequirementDocument(input: {
           },
           {
             role: 'user',
-            content: buildPrompt(fileName, content),
+            content: buildPrompt(fileName, content, reasoningSummary),
           },
         ],
       },
@@ -271,12 +354,19 @@ export async function streamAnalyzeRequirementDocument(input: {
     )
 
     let raw = ''
-    for await (const chunk of stream) {
+    for await (const chunk of jsonStream) {
       if (signal?.aborted) throw createAbortError()
-      const delta = chunk.choices?.[0]?.delta?.content
-      if (!delta) continue
-      raw += delta
-      emit({ type: 'delta', data: { content: delta } })
+      const choiceDelta = chunk.choices?.[0]?.delta
+      if (!choiceDelta) continue
+
+      const nativeReasoning = extractCompatibleReasoning(choiceDelta)
+      if (nativeReasoning) {
+        emit({ type: 'reasoning', data: { content: nativeReasoning } })
+      }
+
+      if (!choiceDelta.content) continue
+      raw += choiceDelta.content
+      emit({ type: 'delta', data: { content: choiceDelta.content } })
     }
 
     if (signal?.aborted) throw createAbortError()

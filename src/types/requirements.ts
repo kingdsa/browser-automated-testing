@@ -58,5 +58,6 @@ export interface GenerationMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  kind?: 'reasoning' | 'result'
   streaming?: boolean
 }

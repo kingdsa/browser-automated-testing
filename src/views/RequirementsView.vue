@@ -194,27 +194,54 @@ function beginGeneration(kind: 'analyze' | 'cases', userText: string, assistantP
       id: uid('assistant'),
       role: 'assistant',
       content: assistantPlaceholder,
+      kind: kind === 'analyze' ? 'reasoning' : undefined,
       streaming: true,
     },
   ]
 }
 
-function currentAssistant() {
-  return [...generationMessages.value].reverse().find((m) => m.role === 'assistant') || null
+function currentAssistant(kind?: GenerationMessage['kind']) {
+  return (
+    [...generationMessages.value]
+      .reverse()
+      .find((message) => message.role === 'assistant' && (!kind || message.kind === kind)) || null
+  )
 }
 
-function appendAssistantDelta(content: string) {
-  const assistant = currentAssistant()
+function ensureAssistant(kind: NonNullable<GenerationMessage['kind']>) {
+  const existing = currentAssistant(kind)
+  if (existing) return existing
+
+  const message: GenerationMessage = {
+    id: uid(`assistant_${kind}`),
+    role: 'assistant',
+    kind,
+    content: '',
+    streaming: true,
+  }
+  generationMessages.value.push(message)
+  return message
+}
+
+function appendAssistantDelta(content: string, kind?: GenerationMessage['kind']) {
+  const assistant = kind ? ensureAssistant(kind) : currentAssistant()
   if (!assistant) return
   assistant.content += content
 }
 
-function finishAssistant(content?: string) {
-  const assistant = currentAssistant()
+function finishAssistant(content?: string, kind?: GenerationMessage['kind']) {
+  const assistant = currentAssistant(kind)
   if (!assistant) return
   if (typeof content === 'string' && content && !assistant.content) assistant.content = content
   assistant.streaming = false
   if (!assistant.content) assistant.content = '本次没有生成文本输出。'
+}
+
+function finishAllAssistants(fallback?: string) {
+  for (const assistant of generationMessages.value.filter((message) => message.role === 'assistant')) {
+    assistant.streaming = false
+    if (!assistant.content) assistant.content = fallback || '本次没有生成文本输出。'
+  }
 }
 
 function stopGeneration(updateUi = true) {
@@ -227,10 +254,7 @@ function stopGeneration(updateUi = true) {
   analyzing.value = false
   generatingCases.value = false
   const assistant = currentAssistant()
-  if (assistant?.streaming) {
-    assistant.streaming = false
-    if (!assistant.content) assistant.content = '已取消生成。'
-  }
+  if (assistant?.streaming) finishAllAssistants('已取消生成。')
   generationStatus.value = '已取消生成'
   statusText.value = '已取消生成'
 }
@@ -282,8 +306,14 @@ async function runAnalyze() {
             const message = String(payload.message || '')
             generationStatus.value = message
             statusText.value = message
+          } else if (type === 'reasoning') {
+            appendAssistantDelta(String(payload.content || ''), 'reasoning')
+            generationStatus.value = 'AI 正在分析需求...'
+            statusText.value = generationStatus.value
           } else if (type === 'delta') {
-            appendAssistantDelta(String(payload.content || ''))
+            const reasoning = currentAssistant('reasoning')
+            if (reasoning) reasoning.streaming = false
+            appendAssistantDelta(String(payload.content || ''), 'result')
             generationStatus.value = '模型正在输出功能点 JSON...'
             statusText.value = generationStatus.value
           } else if (type === 'result') {
@@ -308,7 +338,7 @@ async function runAnalyze() {
       },
     })
 
-    finishAssistant()
+    finishAllAssistants()
     if (gotResult) {
       showGenerationPanel.value = false
       await nextTick()
@@ -322,12 +352,12 @@ async function runAnalyze() {
     if ((error as Error)?.name === 'AbortError') {
       generationStatus.value = '已取消生成'
       statusText.value = '已取消生成'
-      finishAssistant('已取消生成。')
+      finishAllAssistants('已取消生成。')
     } else {
       generationError.value = error instanceof Error ? error.message : String(error)
       errorText.value = generationError.value
       statusText.value = ''
-      finishAssistant()
+      finishAllAssistants()
     }
   } finally {
     generationRunning.value = false

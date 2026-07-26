@@ -18,7 +18,7 @@ const emit = defineEmits<{
 }>()
 
 const scroller = ref<HTMLElement | null>(null)
-const rawPreRefs = new Map<string, HTMLElement>()
+const streamBodyRefs = new Map<string, HTMLElement>()
 const pinnedToBottom = ref(true)
 const BOTTOM_THRESHOLD = 80
 
@@ -36,9 +36,9 @@ function onListScroll() {
   pinnedToBottom.value = isNearBottom(el)
 }
 
-function setRawPre(messageId: string, el: Element | null) {
-  if (el instanceof HTMLElement) rawPreRefs.set(messageId, el)
-  else rawPreRefs.delete(messageId)
+function setStreamBody(messageId: string, el: Element | null) {
+  if (el instanceof HTMLElement) streamBodyRefs.set(messageId, el)
+  else streamBodyRefs.delete(messageId)
 }
 
 function scrollToBottom(force = false) {
@@ -48,25 +48,23 @@ function scrollToBottom(force = false) {
   el.scrollTop = el.scrollHeight
 }
 
-function onRawPreScroll(event: Event) {
-  const pre = event.target
-  if (!(pre instanceof HTMLElement)) return
-  // If user reads earlier raw output, stop forcing this pre to the end.
-  if (!isNearBottom(pre)) {
-    // Don't unpin the whole list unless the list itself is scrolled up.
-    // Just leave this pre alone until user returns near bottom.
-    pre.dataset.pinned = '0'
+function onStreamBodyScroll(event: Event) {
+  const body = event.target
+  if (!(body instanceof HTMLElement)) return
+  // If the user reads earlier output, leave this message in place until they return to the bottom.
+  if (!isNearBottom(body)) {
+    body.dataset.pinned = '0'
     return
   }
-  pre.dataset.pinned = '1'
+  body.dataset.pinned = '1'
 }
 
-function scrollRawPresIfNeeded(force = false) {
-  for (const pre of rawPreRefs.values()) {
-    const pinned = pre.dataset.pinned !== '0'
+function scrollStreamBodiesIfNeeded(force = false) {
+  for (const body of streamBodyRefs.values()) {
+    const pinned = body.dataset.pinned !== '0'
     if (force || (pinned && pinnedToBottom.value)) {
-      pre.scrollTop = pre.scrollHeight
-      pre.dataset.pinned = '1'
+      body.scrollTop = body.scrollHeight
+      body.dataset.pinned = '1'
     }
   }
 }
@@ -76,9 +74,9 @@ watch(
   async () => {
     pinnedToBottom.value = true
     await nextTick()
-    for (const pre of rawPreRefs.values()) pre.dataset.pinned = '1'
+    for (const body of streamBodyRefs.values()) body.dataset.pinned = '1'
     scrollToBottom(true)
-    scrollRawPresIfNeeded(true)
+    scrollStreamBodiesIfNeeded(true)
   },
 )
 
@@ -91,19 +89,23 @@ watch(
     await nextTick()
     requestAnimationFrame(() => {
       scrollToBottom()
-      scrollRawPresIfNeeded(false)
+      scrollStreamBodiesIfNeeded(false)
     })
   },
 )
 
-function roleLabel(role: GenerationMessage['role']) {
-  if (role === 'user') return '你'
-  if (role === 'system') return '系统'
+function roleLabel(message: GenerationMessage) {
+  if (message.role === 'user') return '你'
+  if (message.role === 'system') return '系统'
+  if (message.kind === 'reasoning') return 'AI 分析过程'
+  if (message.kind === 'result') return '结构化 JSON'
   return 'AI'
 }
 
 function isRawAssistant(message: GenerationMessage) {
   if (message.role !== 'assistant') return false
+  if (message.kind === 'reasoning') return false
+  if (message.kind === 'result') return true
   const body = message.content.trim()
   return !body || body.startsWith('{') || body.startsWith('[') || message.streaming
 }
@@ -118,8 +120,9 @@ function formatMarkdown(message: GenerationMessage) {
 
 function jumpToLatest() {
   pinnedToBottom.value = true
-  for (const pre of rawPreRefs.values()) pre.dataset.pinned = '1'
+  for (const body of streamBodyRefs.values()) body.dataset.pinned = '1'
   scrollToBottom(true)
+  scrollStreamBodiesIfNeeded(true)
 }
 </script>
 
@@ -148,21 +151,23 @@ function jumpToLatest() {
         :class="message.role"
       >
         <div class="meta">
-          <span class="role">{{ roleLabel(message.role) }}</span>
+          <span class="role">{{ roleLabel(message) }}</span>
           <span v-if="message.streaming" class="streaming">输出中...</span>
         </div>
 
         <pre
           v-if="isRawAssistant(message) && (message.content || message.streaming)"
           class="raw-output"
-          :ref="(el) => setRawPre(message.id, el as Element | null)"
-          @scroll.passive="onRawPreScroll"
+          :ref="(el) => setStreamBody(message.id, el as Element | null)"
+          @scroll.passive="onStreamBodyScroll"
         >{{ assistantText(message) }}</pre>
 
         <div
           v-else-if="message.content || message.streaming"
           class="content markdown-body"
+          :ref="(el) => setStreamBody(message.id, el as Element | null)"
           v-html="formatMarkdown(message)"
+          @scroll.passive="onStreamBodyScroll"
         />
       </article>
     </div>
@@ -260,7 +265,7 @@ function jumpToLatest() {
 .stream-list {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -270,6 +275,9 @@ function jumpToLatest() {
 }
 
 .message {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 12px 14px;
@@ -277,16 +285,25 @@ function jumpToLatest() {
 }
 
 .message.user {
+  flex: 0 1 auto;
+  max-height: 132px;
   background: color-mix(in srgb, var(--accent) 10%, var(--panel));
   border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
 }
 
 .message.system {
+  flex: 0 1 auto;
+  max-height: 132px;
   background: var(--warning-soft);
   border-color: var(--warning-border);
 }
 
+.message.assistant {
+  flex: 1 1 0;
+}
+
 .meta {
+  flex-shrink: 0;
   display: flex;
   gap: 8px;
   align-items: center;
@@ -310,13 +327,22 @@ function jumpToLatest() {
 }
 
 .content {
+  min-height: 0;
+  overflow: auto;
   font-size: 13px;
   line-height: 1.6;
   word-break: break-word;
+  overscroll-behavior: contain;
+}
+
+.message.assistant > .content,
+.message.assistant > .raw-output {
+  flex: 1;
 }
 
 .raw-output {
-  max-height: 48vh;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
   margin: 0;
   padding: 12px;
