@@ -659,6 +659,7 @@ async function onJsonFileChange(event: Event) {
     testCaseSummary.value = ''
     mainTab.value = 'map'
     statusText.value = `已导入 JSON 思维导图：${file.name}（${featureCount.value} 个功能点）`
+    await nextTick()
     await nextFrame()
     mindMapRef.value?.fit()
   } catch (error) {

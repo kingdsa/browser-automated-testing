@@ -116,7 +116,14 @@ function applyData(data: MindMapNode | null) {
 }
 
 function fit() {
-  mindMap?.view?.fit?.()
+  const currentMindMap = mindMap
+  if (!currentMindMap) return
+
+  currentMindMap.resize?.()
+  currentMindMap.render?.(() => {
+    if (mindMap !== currentMindMap) return
+    currentMindMap.view?.fit?.()
+  })
 }
 
 function exportData(): MindMapNode | null {
