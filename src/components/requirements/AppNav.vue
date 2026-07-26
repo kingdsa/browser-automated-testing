@@ -16,17 +16,17 @@ const route = useRoute()
     <div class="links">
       <RouterLink
         class="link"
-        :class="{ active: route.path === '/' }"
+        :class="{ active: route.path === '/' || route.name === 'requirements' }"
         to="/"
       >
-        浏览器测试
+        需求分析
       </RouterLink>
       <RouterLink
         class="link"
-        :class="{ active: route.path.startsWith('/requirements') }"
-        to="/requirements"
+        :class="{ active: route.path.startsWith('/browser-test') }"
+        to="/browser-test"
       >
-        需求分析
+        浏览器测试
       </RouterLink>
     </div>
   </nav>

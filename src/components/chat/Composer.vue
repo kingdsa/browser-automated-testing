@@ -25,6 +25,8 @@ const attachment = ref<ChatAttachment | null>(null)
 const attachError = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const dragOver = ref(false)
+const isComposing = ref(false)
+let compositionEndedAt = 0
 
 const presets = [
   '像测试人员一样检查当前页面：布局、可用性、接口错误、控制台报错，最后请输出完整 Markdown 测试报告。',
@@ -58,7 +60,27 @@ function submit() {
   if (fileInputRef.value) fileInputRef.value.value = ''
 }
 
+function onCompositionStart() {
+  isComposing.value = true
+}
+
+function onCompositionEnd() {
+  isComposing.value = false
+  // Some IMEs fire Enter right after compositionend with isComposing already false.
+  compositionEndedAt = Date.now()
+}
+
 function onKeydown(event: KeyboardEvent) {
+  // Chinese/Japanese/Korean IME: Enter confirms candidates, should not submit.
+  if (
+    event.isComposing ||
+    isComposing.value ||
+    event.keyCode === 229 ||
+    Date.now() - compositionEndedAt < 50
+  ) {
+    return
+  }
+
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
     submit()
@@ -153,6 +175,8 @@ async function onDrop(event: DragEvent) {
         rows="3"
         placeholder="描述测试目标；可上传测试用例文件，系统会把 提示词 + Skill + 用例 一起交给 AI..."
         :disabled="running"
+        @compositionstart="onCompositionStart"
+        @compositionend="onCompositionEnd"
         @keydown="onKeydown"
       />
 

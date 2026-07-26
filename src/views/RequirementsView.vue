@@ -550,79 +550,6 @@ async function onJsonFileChange(event: Event) {
     input.value = ''
   }
 }
-
-function walk(node: MindMapNode, acc: MindMapNode[], isRoot = true) {
-  if (!isRoot) acc.push(node)
-  for (const child of node.children || []) walk(child, acc, false)
-}
-
-function updateFeatureText(index: number, text: string) {
-  if (!mindMapData.value) return
-  const cloned = structuredClone(mindMapData.value)
-  const list: MindMapNode[] = []
-  walk(cloned, list)
-  if (!list[index]) return
-  list[index].data.text = text.trim() || list[index].data.text
-  mindMapData.value = cloned
-  featureCount.value = list.length
-}
-
-function removeFeature(index: number) {
-  if (!mindMapData.value) return
-  const target = featureList.value[index]
-  const label = target?.text || '该功能点'
-  if (!window.confirm(`确认删除功能点「${label}」及其子功能？`)) return
-
-  const cloned = structuredClone(mindMapData.value)
-  const removed = removeFeatureAt(cloned, index)
-  if (!removed) {
-    errorText.value = '删除失败：未找到对应功能点'
-    return
-  }
-  mindMapData.value = cloned
-  featureCount.value = flattenFeatures(cloned).length
-  statusText.value = `已删除功能点「${label}」，当前剩余 ${featureCount.value} 个`
-  errorText.value = ''
-}
-
-/** 按功能点列表的前序遍历顺序删除指定节点（含子树）。 */
-function removeFeatureAt(parent: MindMapNode, index: number, counter = { i: 0 }): boolean {
-  const children = parent.children || []
-  for (let i = 0; i < children.length; i += 1) {
-    if (counter.i === index) {
-      children.splice(i, 1)
-      parent.children = children
-      return true
-    }
-    counter.i += 1
-    if (removeFeatureAt(children[i]!, index, counter)) return true
-  }
-  return false
-}
-
-function addFeature() {
-  if (!mindMapData.value) {
-    mindMapData.value = {
-      data: { text: title.value || '需求功能点', expand: true },
-      children: [],
-    }
-  }
-  const cloned = structuredClone(mindMapData.value)
-  if (!cloned.children) cloned.children = []
-  const nextIndex = flattenFeatures(cloned).length + 1
-  cloned.children.push({
-    data: {
-      text: `新功能点 ${nextIndex}`,
-      note: '',
-      expand: true,
-    },
-    children: [],
-  })
-  mindMapData.value = cloned
-  featureCount.value = flattenFeatures(cloned).length
-  statusText.value = `已新增功能点，当前共 ${featureCount.value} 个`
-  mainTab.value = 'map'
-}
 </script>
 
 <template>
@@ -728,38 +655,6 @@ function addFeature() {
             <div class="badge">功能点 {{ featureCount }}</div>
             <div v-if="testCases.length" class="badge badge--case">用例 {{ testCases.length }}</div>
           </div>
-        </section>
-
-        <section v-if="featureList.length || mindMapData" class="card list-card">
-          <div class="card__head">
-            <h2>3. 功能点列表（可编辑）</h2>
-            <button type="button" class="mini-btn" @click="addFeature">新增</button>
-          </div>
-          <div v-if="featureList.length" class="feature-list">
-            <div v-for="(item, index) in featureList" :key="`${item.path}-${index}`" class="feature-item">
-              <div class="feature-item__row">
-                <input
-                  class="feature-input"
-                  :value="item.text"
-                  @change="updateFeatureText(index, ($event.target as HTMLInputElement).value)"
-                />
-                <button
-                  type="button"
-                  class="delete-btn"
-                  title="删除该功能点及其子功能"
-                  @click="removeFeature(index)"
-                >
-                  删除
-                </button>
-              </div>
-              <div class="feature-path">{{ item.path }}</div>
-              <div v-if="item.note" class="feature-note">{{ item.note }}</div>
-              <div v-if="item.tags?.length" class="tags">
-                <span v-for="tag in item.tags" :key="tag" class="tag">{{ tag }}</span>
-              </div>
-            </div>
-          </div>
-          <div v-else class="hint">暂无功能点，可点击“新增”手动添加。</div>
         </section>
       </aside>
 
