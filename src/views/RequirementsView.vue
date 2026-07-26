@@ -597,14 +597,13 @@ async function onJsonFileChange(event: Event) {
           </div>
 
           <div v-else class="text-panel">
-            <label class="label" for="req-text">需求正文</label>
             <textarea
               id="req-text"
               v-model="draftText"
-              rows="12"
+              class="req-text"
+              rows="8"
               placeholder="粘贴 PRD、用户故事、功能清单..."
             />
-            <div class="hint">也可先上传文件，系统会把解析结果填到这里供你微调。</div>
           </div>
         </section>
 
@@ -915,10 +914,15 @@ async function onJsonFileChange(event: Event) {
 .upload {
   border: 1.5px dashed color-mix(in srgb, var(--accent) 40%, var(--border));
   border-radius: var(--radius-md);
+  min-height: 188px;
   padding: 22px 14px;
   text-align: center;
   cursor: pointer;
   background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background-color var(--duration-fast) var(--ease-out),
@@ -973,6 +977,14 @@ async function onJsonFileChange(event: Event) {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.req-text {
+  min-height: 188px;
+  height: 188px;
+  resize: vertical;
+  line-height: 1.6;
+  overflow: auto;
 }
 
 .label {
