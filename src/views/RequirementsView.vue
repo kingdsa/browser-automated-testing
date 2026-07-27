@@ -986,6 +986,7 @@ async function onTestCaseJsonFileChange(event: Event) {
             <span>可导入/导出 JSON 思维导图</span>
           </div>
           <div v-else-if="mainTab === 'cases'" class="tips">
+            <span>左侧目录可按功能点快速跳转</span>
             <span>支持编辑标题、步骤、期望结果</span>
             <span>可新增/删除/排序用例</span>
             <span>可导入 JSON，导出 Markdown 或 JSON</span>
