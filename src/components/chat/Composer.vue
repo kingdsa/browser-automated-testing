@@ -9,6 +9,10 @@ import {
   normalizeTestCaseContent,
 } from '@/utils/testCases'
 
+const DISMISSED_TIPS_KEY = 'browser-test-composer-dismissed-tips'
+
+type DismissibleTipId = 'upload-guide' | 'save-report'
+
 const props = defineProps<{
   disabled?: boolean
   running?: boolean
@@ -27,6 +31,32 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const dragOver = ref(false)
 const isComposing = ref(false)
 let compositionEndedAt = 0
+
+function loadDismissedTips(): Set<DismissibleTipId> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_TIPS_KEY)
+    if (!raw) return new Set()
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Set()
+    return new Set(parsed.filter((item): item is DismissibleTipId => item === 'upload-guide' || item === 'save-report'))
+  } catch {
+    return new Set()
+  }
+}
+
+const dismissedTips = ref<Set<DismissibleTipId>>(loadDismissedTips())
+
+function isTipVisible(id: DismissibleTipId) {
+  return !dismissedTips.value.has(id)
+}
+
+function dismissTip(id: DismissibleTipId) {
+  if (dismissedTips.value.has(id)) return
+  const next = new Set(dismissedTips.value)
+  next.add(id)
+  dismissedTips.value = next
+  localStorage.setItem(DISMISSED_TIPS_KEY, JSON.stringify([...next]))
+}
 
 const presets = [
   '像测试人员一样检查当前页面：布局、可用性、接口错误、控制台报错，最后请输出完整 Markdown 测试报告。',
@@ -194,10 +224,28 @@ async function onDrop(event: DragEvent) {
       <div class="tips">
         <p v-if="configTip" class="tip">{{ configTip }}</p>
         <p v-if="attachError" class="tip tip--error">{{ attachError }}</p>
-        <p class="tip">
-          可上传需求页导出的测试用例（MD/JSON）。发送时会组合：用户提示词 + control-chrome Skill + 用例附件。
-        </p>
-        <p class="tip">保存结果只会保留最后一次 AI 的 MD 文档，请在输入中明确要求：输出完整 Markdown 报告</p>
+        <button
+          v-if="isTipVisible('upload-guide')"
+          type="button"
+          class="tip tip--dismissible"
+          title="点击删除此提示"
+          @click="dismissTip('upload-guide')"
+        >
+          <span>
+            可上传需求页导出的测试用例（MD/JSON）。发送时会组合：用户提示词 + control-chrome Skill + 用例附件。
+          </span>
+          <span class="tip__close" aria-hidden="true">×</span>
+        </button>
+        <button
+          v-if="isTipVisible('save-report')"
+          type="button"
+          class="tip tip--dismissible"
+          title="点击删除此提示"
+          @click="dismissTip('save-report')"
+        >
+          <span>保存结果只会保留最后一次 AI 的 MD 文档，请在输入中明确要求：输出完整 Markdown 报告</span>
+          <span class="tip__close" aria-hidden="true">×</span>
+        </button>
       </div>
 
       <div class="actions">
@@ -306,6 +354,48 @@ async function onDrop(event: DragEvent) {
   padding: 8px 10px;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.tip--dismissible {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
+}
+
+.tip--dismissible:hover {
+  border-color: color-mix(in srgb, var(--warning-text) 35%, var(--warning-border));
+  background: color-mix(in srgb, var(--warning-soft) 80%, white);
+}
+
+.tip--dismissible:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.tip__close {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.72;
+}
+
+.tip--dismissible:hover .tip__close {
+  opacity: 1;
 }
 
 .tip--error {
