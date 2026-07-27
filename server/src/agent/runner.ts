@@ -245,6 +245,18 @@ export async function runAgent(input: RunAgentInput): Promise<void> {
         // Continue anyway; agent can still inspect whatever page is visible.
         onEvent({ type: 'status', data: { message: '登录等待超时，将基于当前可见页面继续检测' } })
       }
+    } else {
+      // Avoid the model treating every login screen as a hard stop for credentials.
+      history.push({
+        role: 'system',
+        content: [
+          '登录策略提示：本次未启用“等待手动登录”。',
+          '若当前页面是登录页，且用户目标/用例是测试登录页或登录功能本身，请直接测试该页的 UI、校验、交互、错误提示与相关接口。',
+          '不要停下来要求用户输入账号密码，也不要空等用户登录。',
+          '只有用户消息或测试用例附件已提供可用账号密码，且用例要求登录成功时，才填写真实凭据。',
+          '若缺少账号密码，将“登录成功”路径标为阻塞，并继续完成不依赖真实凭据的检查。',
+        ].join(''),
+      })
     }
 
     const attachment = browser.getAttachmentInfo()

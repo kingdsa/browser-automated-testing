@@ -143,6 +143,7 @@ onMounted(refreshMeta)
       <p class="hint">
         本机桌面：勾选后会弹出浏览器，你登录完自动继续。
         线上无图形服务器：不能本地弹窗，请在“高级”里填远程 CDP，在有界面机器上登录，系统会等待该浏览器完成登录。
+        若目标就是测登录页本身，请关闭此项，否则系统会一直等待离开登录页。
       </p>
       <label v-if="settingsStore.settings.session.waitForLogin">
         <span>登录等待秒数</span>
