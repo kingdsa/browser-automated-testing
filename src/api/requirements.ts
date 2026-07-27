@@ -122,12 +122,24 @@ export async function extractRequirementFile(file: File): Promise<{
   return data
 }
 
+export interface TestCaseSessionConfig {
+  targetUrl?: string
+  headless?: boolean
+  maxSteps?: number
+  browserMode?: 'auto' | 'launch' | 'attach'
+  cdpEndpoint?: string
+  attachUrlIncludes?: string
+  waitForLogin?: boolean
+  loginWaitSeconds?: number
+}
+
 export async function generateTestCases(input: {
   llm: LlmSettings
   title?: string
   summary?: string
   root?: MindMapNode | null
   features?: FeaturePoint[]
+  session?: TestCaseSessionConfig
 }): Promise<GenerateTestCasesResult> {
   const res = await fetch('/api/requirements/test-cases', {
     method: 'POST',
@@ -138,6 +150,7 @@ export async function generateTestCases(input: {
       summary: input.summary,
       root: input.root,
       features: input.features,
+      session: input.session,
     }),
   })
 
@@ -154,6 +167,7 @@ export async function streamGenerateTestCases(input: {
   summary?: string
   root?: MindMapNode | null
   features?: FeaturePoint[]
+  session?: TestCaseSessionConfig
   handlers: StreamHandlers
 }): Promise<void> {
   const response = await fetch('/api/requirements/test-cases/stream', {
@@ -165,6 +179,7 @@ export async function streamGenerateTestCases(input: {
       summary: input.summary,
       root: input.root,
       features: input.features,
+      session: input.session,
     }),
     signal: input.handlers.signal,
   })

@@ -25,7 +25,7 @@ AI 驱动的前端质量工具箱（**BAT / Signal Lab**）：从 **需求文档
 - **SSE 两阶段分析**：先流式展示 AI 分析摘要，再生成结构化 JSON 并切换到思维导图；支持中途取消
 - 功能点可在思维导图与列表中增删改
 - 思维导图支持 **JSON 导入 / 导出**
-- 基于功能点 **流式生成测试用例**，支持在线编辑
+- 基于功能点 **流式生成测试用例**，支持在线编辑；可选目标 URL / 当前浏览器标签，经 control-chrome 真实探索后落地生成
 - 测试用例导出 **Markdown / JSON**，可直接带去浏览器测试页执行
 
 ### 浏览器测试
@@ -48,7 +48,10 @@ AI 驱动的前端质量工具箱（**BAT / Signal Lab**）：从 **需求文档
    AI 流式提取功能点 ──► 可编辑思维导图 / 功能点列表
         │
         ▼
-   一键生成测试用例 ──► 在线编辑 ──► 导出 MD / JSON
+   （可选）选择目标 URL / 当前浏览器标签
+        │
+        ▼
+   control-chrome 深度探索页面 + 功能点 ──► 生成测试用例 ──► 在线编辑 ──► 导出 MD / JSON
 
 2. 浏览器测试页
    配置 LLM + 目标 URL + 登录策略
@@ -108,10 +111,13 @@ npm run dev
 6. 可选：
    - **导出 JSON**：备份/分享功能点树
    - **导入 JSON**：恢复此前导出的思维导图
-7. 点击 **生成测试用例**
-   - 同样先流式展示过程，可取消
+7. （可选）在「目标页面」填写 URL，或点「刷新标签 / 使用当前标签」附着已打开页面；可勾选等待手动登录
+8. 点击 **生成测试用例**
+   - 若指定了目标页：服务端会用 control-chrome + Playwright 深度探索真实页面，再按页面路径生成用例（禁止脱离页面发散）
+   - 未指定目标页：仍仅基于功能点生成（兼容旧流程）
+   - 流式输出过程可在面板中查看（含浏览器工具操作），可随时取消
    - 完成后在「测试用例」页签在线编辑
-8. 导出用例为 Markdown 或 JSON，供浏览器测试页上传执行
+9. 导出用例为 Markdown 或 JSON，供浏览器测试页上传执行
 
 ### B. 浏览器测试
 
@@ -147,17 +153,18 @@ npm run dev
 ┌──────────────────────── Vue 3 + Pinia + Vue Router ────────────────────────┐
 │  /  RequirementsView          │  /browser-test  HomeView                   │
 │  · 上传/粘贴需求               │  · SettingsPanel（LLM + 浏览器会话）         │
-│  · GenerationStreamPanel      │  · MessageList（流式对话 + 工具轨迹）        │
-│  · FeatureMindMap             │  · Composer（提示词 + 用例附件）             │
-│  · TestCasePanel              │  · 保存最后一次 AI Markdown 报告            │
+│  · 目标 URL / 当前浏览器标签   │  · MessageList（流式对话 + 工具轨迹）        │
+│  · GenerationStreamPanel      │  · Composer（提示词 + 用例附件）             │
+│  · FeatureMindMap             │  · 保存最后一次 AI Markdown 报告            │
+│  · TestCasePanel              │                                            │
 └───────────────┬───────────────┴──────────────────┬─────────────────────────┘
                 │ SSE / REST                       │ SSE / REST
                 ▼                                  ▼
 ┌──────────────────────── Express Agent (:8787) ─────────────────────────────┐
 │  /api/requirements/*          │  /api/chat + /api/browser/tabs             │
 │  analyze / extract / cases    │  agent/runner 工具循环                      │
-│                               │  browser/session + Playwright tools        │
-│                               │  skills/* 注入系统提示                      │
+│  exploreForTestCases          │  browser/session + Playwright tools        │
+│  （可选页面深度探索）           │  skills/control-chrome 注入系统提示         │
 └───────────────┬───────────────┴──────────────────┬─────────────────────────┘
                 │                                  │
                 ▼                                  ▼
@@ -170,11 +177,25 @@ npm run dev
 
 ```text
 前端 multipart/json
-  → POST /api/requirements/analyze/stream 或 /test-cases/stream
+  → POST /api/requirements/analyze/stream
   → 解析文档 / 组装 prompt
-  → LLM stream deltas（SSE: status / delta）
+  → LLM stream deltas（SSE: status / delta / mindmap）
   → 解析 JSON 结果（SSE: result）
   → done；客户端断开即可取消
+```
+
+**测试用例生成（可选页面落地）**
+
+```text
+前端 POST /api/requirements/test-cases/stream
+  （features + 可选 session.targetUrl / browserMode / waitForLogin）
+  → 若有目标页：exploreForTestCases
+       · 注入 control-chrome skill
+       · Playwright 深度探索（open/snapshot/click/...）
+       · 产出页面探索笔记（SSE: status / tool_* / delta）
+  → 结合功能点 + 探索笔记组装 prompt
+  → LLM 输出用例 JSON（SSE: delta / result）
+  → 无目标页则直接按功能点生成（兼容旧流程）
 ```
 
 **浏览器测试（Agent 工具循环）**
@@ -295,7 +316,8 @@ DESIGN.md                    # UI 设计规范
 
 ### `POST /api/requirements/test-cases`
 
-基于功能点树 / 列表生成可编辑测试用例。
+基于功能点树 / 列表生成可编辑测试用例。可选 `session`（`targetUrl` / `browserMode` / `waitForLogin` 等）：
+有目标页时先用 control-chrome 深度探索，再按页面事实生成用例；无目标页则仅基于功能点。
 
 ### `POST /api/requirements/test-cases/stream`
 

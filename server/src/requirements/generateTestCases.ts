@@ -1,6 +1,11 @@
 import OpenAI from 'openai'
 import { z } from 'zod'
-import type { LlmSettings } from '../types/index.js'
+import type { LlmSettings, SessionConfig } from '../types/index.js'
+import {
+  explorePageForTestCases,
+  shouldExploreWithBrowser,
+  type PageExplorationResult,
+} from './exploreForTestCases.js'
 
 export interface MindMapNodeData {
   text: string
@@ -41,11 +46,28 @@ export interface GenerateTestCasesResult {
   summary: string
   cases: TestCase[]
   caseCount: number
+  groundedInPage?: boolean
+  explorationNotes?: string
+  visitedUrls?: string[]
 }
 
 export type TestCaseStreamEvent =
   | { type: 'status'; data: { message: string } }
   | { type: 'delta'; data: { content: string } }
+  | { type: 'tool_start'; data: { id: string; name: string; arguments: string } }
+  | {
+      type: 'tool_result'
+      data: {
+        id?: string
+        name: string
+        result: {
+          ok: boolean
+          summary: string
+          data?: unknown
+          screenshotBase64?: string
+        }
+      }
+    }
   | { type: 'result'; data: GenerateTestCasesResult }
   | { type: 'error'; data: { message: string } }
   | { type: 'done'; data: Record<string, never> }
@@ -130,11 +152,12 @@ function normalizeCases(
   })
 }
 
-function fallbackCases(title: string, features: FeaturePoint[]): GenerateTestCasesResult {
+function fallbackCases(title: string, features: FeaturePoint[], exploration?: PageExplorationResult | null): GenerateTestCasesResult {
   const cases: TestCase[] = features.flatMap((feature, index) => {
     const baseId = makeCaseId(index * 2)
     const baseIdAlt = makeCaseId(index * 2 + 1)
     const priority = (feature.tags || []).find((tag) => /^P[0-3]$/i.test(tag))?.toUpperCase() as TestCasePriority | undefined
+    const pageHint = exploration?.targetUrl || exploration?.visitedUrls?.[0]
     const main: TestCase = {
       id: baseId,
       feature: feature.text,
@@ -142,12 +165,19 @@ function fallbackCases(title: string, features: FeaturePoint[]): GenerateTestCas
       title: `${feature.text} - 正常流程`,
       priority: priority || 'P1',
       type: '功能',
-      preconditions: feature.note || '系统可用，用户已具备相应权限',
-      steps: [
-        `进入与「${feature.text}」相关的页面/入口`,
-        `按照需求完成「${feature.text}」的主流程操作`,
-        '检查页面反馈与数据结果',
-      ],
+      preconditions: feature.note || (pageHint ? `系统可用；可访问 ${pageHint}` : '系统可用，用户已具备相应权限'),
+      steps: pageHint
+        ? [
+            `打开目标页面 ${pageHint}`,
+            `在页面中定位与「${feature.text}」相关的入口/控件`,
+            `按照页面实际路径完成「${feature.text}」主流程`,
+            '检查页面反馈与数据结果',
+          ]
+        : [
+            `进入与「${feature.text}」相关的页面/入口`,
+            `按照需求完成「${feature.text}」的主流程操作`,
+            '检查页面反馈与数据结果',
+          ],
       expected: `「${feature.text}」按预期完成，界面反馈正确，数据一致`,
       ...(feature.note ? { note: feature.note } : {}),
     }
@@ -156,24 +186,31 @@ function fallbackCases(title: string, features: FeaturePoint[]): GenerateTestCas
       feature: feature.text,
       featurePath: feature.path,
       title: `${feature.text} - 异常/边界`,
-      priority: priority === 'P0' ? 'P0' : 'P2',
+      priority: priority || 'P2',
       type: '异常',
-      preconditions: '系统可用；准备非法/缺失/边界输入数据',
+      preconditions: feature.note || '系统可用',
       steps: [
         `进入「${feature.text}」相关入口`,
-        '使用空值、超长、非法格式或无权限等异常条件操作',
-        '观察校验提示与系统稳定性',
+        '输入非法/缺失/边界数据，或执行异常操作',
+        '观察错误提示与系统状态',
       ],
-      expected: '系统给出明确错误/校验提示，不出现崩溃或脏数据',
+      expected: '系统给出明确错误提示，不产生脏数据，不崩溃',
     }
     return [main, negative]
   })
 
   return {
-    title: `${title || '需求'}测试用例`,
+    title: `${title}测试用例`,
     summary: `基于 ${features.length} 个功能点自动生成基础测试用例（模型不可用时的降级结果）`,
     cases,
     caseCount: cases.length,
+    groundedInPage: Boolean(exploration),
+    ...(exploration
+      ? {
+          explorationNotes: exploration.notes.slice(0, 4000),
+          visitedUrls: exploration.visitedUrls,
+        }
+      : {}),
   }
 }
 
@@ -181,9 +218,45 @@ function buildPrompt(input: {
   title: string
   summary?: string
   features: FeaturePoint[]
+  exploration?: PageExplorationResult | null
 }): string {
   const featureJson = JSON.stringify(input.features.slice(0, 80), null, 2)
-  return `请根据以下功能点列表，生成可执行的软件测试用例，只输出合法 JSON，不要 markdown 代码块，不要额外解释。
+  const exploration = input.exploration
+  const explorationBlock = exploration
+    ? `
+【真实页面探索笔记】（最高优先级事实来源）
+目标 URL：${exploration.targetUrl || exploration.visitedUrls[0] || '未知'}
+访问过的 URL：${exploration.visitedUrls.join(' | ') || '未记录'}
+探索步数：${exploration.stepCount}
+
+${exploration.notes.slice(0, 12000)}
+
+工具观察摘要（节选）：
+${exploration.toolSummaries.slice(-40).map((item) => `- ${item}`).join('\n') || '- 无'}
+`
+    : ''
+
+  const groundedRules = exploration
+    ? `
+页面落地规则（必须遵守）：
+1. 用例 steps 必须基于探索笔记中真实出现的页面路径、按钮/链接文案、表单字段与反馈。
+2. 禁止编造页面上不存在的入口、菜单、路由、按钮文案。
+3. 功能点是覆盖范围：优先为探索到的相关路径写可执行步骤；若某功能点在页面未找到入口，steps 写“尝试定位/确认缺失”，并在 note 标明“页面未找到对应入口”，不要虚构成功路径。
+4. steps 使用给人看的业务操作描述（如：点击「提交」、在「手机号」输入框填写无效号码），不要写 CSS selector / Playwright 选择器。
+5. expected 尽量对应探索中观察到的真实反馈文案/状态；未知时写可验证的业务结果。
+6. preconditions 应反映真实前提（是否需登录、是否需特定数据、是否从某 URL 进入）。
+`
+    : `
+生成规则：
+1. 每个功能点至少 1 条主流程用例；关键功能补充 1 条异常/边界用例。
+2. 用例要具体、可执行，避免空泛描述。
+3. steps 用有序操作步骤，expected 写可验证结果。
+4. priority 优先参考功能点 tags；没有则按业务重要性判断。
+5. 总数建议控制在 ${Math.min(Math.max(input.features.length, 8), 40)} 条左右，不要滥造。
+6. feature / featurePath 必须能对应到输入功能点。
+`
+
+  return `请根据以下功能点列表${exploration ? '与真实页面探索笔记' : ''}，生成可执行的软件测试用例，只输出合法 JSON，不要 markdown 代码块，不要额外解释。
 
 JSON 结构必须是：
 {
@@ -205,17 +278,16 @@ JSON 结构必须是：
   ]
 }
 
-生成规则：
-1. 每个功能点至少 1 条主流程用例；关键功能补充 1 条异常/边界用例。
-2. 用例要具体、可执行，避免空泛描述。
-3. steps 用有序操作步骤，expected 写可验证结果。
-4. priority 优先参考功能点 tags；没有则按业务重要性判断。
-5. 总数建议控制在 ${Math.min(Math.max(input.features.length, 8), 40)} 条左右，不要滥造。
-6. feature / featurePath 必须能对应到输入功能点。
+${groundedRules}
+通用规则：
+1. 每个功能点至少 1 条主流程用例；关键功能可补充异常/边界用例。
+2. priority 优先参考功能点 tags；没有则按业务重要性判断。
+3. 总数建议控制在 ${Math.min(Math.max(input.features.length, 8), 40)} 条左右，不要滥造。
+4. feature / featurePath 必须能对应到输入功能点。
 
 需求标题：${input.title || '未命名需求'}
 需求摘要：${input.summary || '无'}
-
+${explorationBlock}
 功能点列表 JSON：
 ${featureJson}`
 }
@@ -261,7 +333,12 @@ function assertLlmReady(llm: LlmSettings) {
   if (!llm.model?.trim()) throw new Error('请先配置模型名称')
 }
 
-function parseTestCaseResult(raw: string, title: string, features: FeaturePoint[]): GenerateTestCasesResult {
+function parseTestCaseResult(
+  raw: string,
+  title: string,
+  features: FeaturePoint[],
+  exploration?: PageExplorationResult | null,
+): GenerateTestCasesResult {
   if (!raw.trim()) throw new Error('模型未返回测试用例')
 
   let parsed: unknown
@@ -277,11 +354,23 @@ function parseTestCaseResult(raw: string, title: string, features: FeaturePoint[
   if (!validated.success) throw new Error('模型返回结构不完整')
 
   const cases = normalizeCases(validated.data.cases, features)
+  const grounded = Boolean(exploration)
   return {
     title: validated.data.title.trim() || `${title}测试用例`,
-    summary: validated.data.summary.trim() || `覆盖 ${features.length} 个功能点，共 ${cases.length} 条用例`,
+    summary:
+      validated.data.summary.trim() ||
+      (grounded
+        ? `基于真实页面探索覆盖 ${features.length} 个功能点，共 ${cases.length} 条用例`
+        : `覆盖 ${features.length} 个功能点，共 ${cases.length} 条用例`),
     cases,
     caseCount: cases.length,
+    groundedInPage: grounded,
+    ...(exploration
+      ? {
+          explorationNotes: exploration.notes.slice(0, 4000),
+          visitedUrls: exploration.visitedUrls,
+        }
+      : {}),
   }
 }
 
@@ -291,6 +380,7 @@ export async function generateTestCasesFromFeatures(input: {
   summary?: string
   root?: MindMapNode | null
   features?: FeaturePoint[]
+  session?: SessionConfig
 }): Promise<GenerateTestCasesResult> {
   return streamGenerateTestCasesFromFeatures({
     ...input,
@@ -304,6 +394,7 @@ export async function streamGenerateTestCasesFromFeatures(input: {
   summary?: string
   root?: MindMapNode | null
   features?: FeaturePoint[]
+  session?: SessionConfig
   signal?: AbortSignal
   onEvent?: (event: TestCaseStreamEvent) => void
 }): Promise<GenerateTestCasesResult> {
@@ -323,7 +414,59 @@ export async function streamGenerateTestCasesFromFeatures(input: {
   const summary = input.summary?.trim() || ''
   const client = createClient(llm)
 
-  emit({ type: 'status', data: { message: `正在根据 ${features.length} 个功能点生成测试用例...` } })
+  let exploration: PageExplorationResult | null = null
+
+  if (shouldExploreWithBrowser(input.session)) {
+    emit({
+      type: 'status',
+      data: {
+        message: input.session?.targetUrl?.trim()
+          ? `已指定目标 URL，将先通过 control-chrome 深度探索页面：${input.session.targetUrl}`
+          : '将先附着当前浏览器标签，通过 control-chrome 深度探索页面…',
+      },
+    })
+    try {
+      exploration = await explorePageForTestCases({
+        llm,
+        title,
+        summary,
+        features,
+        session: input.session,
+        signal,
+        onEvent: (event) => {
+          if (event.type === 'status' || event.type === 'delta' || event.type === 'tool_start' || event.type === 'tool_result') {
+            emit(event)
+          } else if (event.type === 'error') {
+            emit({ type: 'status', data: { message: `页面探索警告：${event.data.message}` } })
+          }
+        },
+      })
+      emit({
+        type: 'status',
+        data: {
+          message: `页面探索完成（${exploration.stepCount} 步，访问 ${exploration.visitedUrls.length || 1} 个 URL），开始基于页面事实生成测试用例…`,
+        },
+      })
+      // Separate exploration text from the upcoming JSON stream in the UI.
+      emit({
+        type: 'delta',
+        data: {
+          content: `\n\n---\n【阶段切换】页面探索结束，开始生成测试用例 JSON…\n---\n\n`,
+        },
+      })
+    } catch (error) {
+      if (isAbortError(error, signal)) throw createAbortError()
+      const reason = error instanceof Error ? error.message : String(error)
+      // Exploration failure should not hard-block pure feature generation.
+      emit({
+        type: 'status',
+        data: { message: `页面探索失败，将回退为仅基于功能点生成：${reason}` },
+      })
+      exploration = null
+    }
+  } else {
+    emit({ type: 'status', data: { message: `未指定目标页面，正在根据 ${features.length} 个功能点生成测试用例...` } })
+  }
 
   try {
     const stream = await client.chat.completions.create(
@@ -334,12 +477,13 @@ export async function streamGenerateTestCasesFromFeatures(input: {
         messages: [
           {
             role: 'system',
-            content:
-              '你是资深测试架构师，擅长把功能点拆解为可执行、可回归的测试用例。始终只输出合法 JSON。',
+            content: exploration
+              ? '你是资深测试架构师。你必须严格依据真实页面探索笔记与功能点生成可执行测试用例，禁止脱离页面事实发散。始终只输出合法 JSON。'
+              : '你是资深测试架构师，擅长把功能点拆解为可执行、可回归的测试用例。始终只输出合法 JSON。',
           },
           {
             role: 'user',
-            content: buildPrompt({ title, summary, features }),
+            content: buildPrompt({ title, summary, features, exploration }),
           },
         ],
       },
@@ -358,7 +502,7 @@ export async function streamGenerateTestCasesFromFeatures(input: {
     if (signal?.aborted) throw createAbortError()
 
     emit({ type: 'status', data: { message: '模型输出完成，正在解析测试用例...' } })
-    const result = parseTestCaseResult(raw, title, features)
+    const result = parseTestCaseResult(raw, title, features, exploration)
     emit({ type: 'result', data: result })
     emit({ type: 'done', data: {} })
     return result
@@ -367,7 +511,7 @@ export async function streamGenerateTestCasesFromFeatures(input: {
       throw createAbortError()
     }
     // Keep product usable even when model output is unstable.
-    const fallback = fallbackCases(title, features)
+    const fallback = fallbackCases(title, features, exploration)
     const reason = error instanceof Error ? error.message : String(error)
     const result = {
       ...fallback,

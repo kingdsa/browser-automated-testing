@@ -58,6 +58,9 @@ export interface GenerateTestCasesResult {
   cases: TestCase[]
   caseCount: number
   error?: string
+  groundedInPage?: boolean
+  explorationNotes?: string
+  visitedUrls?: string[]
 }
 
 export interface GenerationMessage {

@@ -9,7 +9,7 @@ import {
   streamAnalyzeRequirement,
   streamGenerateTestCases,
 } from '@/api/requirements'
-import { fetchDefaults } from '@/api/agent'
+import { fetchBrowserTabs, fetchDefaults } from '@/api/agent'
 import { useSettingsStore } from '@/stores/settings'
 import type {
   GenerationMessage,
@@ -54,6 +54,16 @@ const readonlyMap = ref(false)
 const testCaseTitle = ref('')
 const testCaseSummary = ref('')
 const testCases = ref<TestCase[]>([])
+
+/** Optional page grounding for test-case generation */
+const caseTargetUrl = ref('')
+const caseBrowserMode = ref<'auto' | 'launch' | 'attach'>('auto')
+const caseWaitForLogin = ref(false)
+const browserTabsLoading = ref(false)
+const browserTabsHint = ref('')
+const browserTabs = ref<
+  Array<{ endpoint: string; browser?: string; index: number; url: string; title: string }>
+>([])
 
 const showGenerationPanel = ref(false)
 const generationKind = ref<'analyze' | 'cases' | null>(null)
@@ -100,9 +110,18 @@ onMounted(async () => {
     const defaults = await fetchDefaults()
     serverHasKey.value = defaults.llm.hasApiKey
     await settings.hydrateFromServer()
+    // Prefill from browser-test session settings when available.
+    if (settings.settings.session.targetUrl) {
+      caseTargetUrl.value = settings.settings.session.targetUrl
+    }
+    if (settings.settings.session.browserMode) {
+      caseBrowserMode.value = settings.settings.session.browserMode
+    }
+    caseWaitForLogin.value = Boolean(settings.settings.session.waitForLogin)
   } catch {
     serverHasKey.value = false
   }
+  await refreshBrowserTabs()
 })
 
 onBeforeUnmount(() => {
@@ -198,6 +217,61 @@ function llmPayload() {
     apiKey: settings.settings.llm.apiKey,
     model: settings.settings.llm.model,
   }
+}
+
+function caseSessionPayload() {
+  const targetUrl = caseTargetUrl.value.trim()
+  // Only ground in a real page when user provided URL or explicitly chose attach mode.
+  // Avoid accidental exploration from leftover browser-test attachUrlIncludes.
+  if (!targetUrl && caseBrowserMode.value !== 'attach') {
+    return undefined
+  }
+  return {
+    targetUrl: targetUrl || undefined,
+    headless: settings.settings.session.headless,
+    maxSteps: settings.settings.session.maxSteps,
+    browserMode: caseBrowserMode.value,
+    cdpEndpoint: settings.settings.session.cdpEndpoint || undefined,
+    attachUrlIncludes:
+      targetUrl || settings.settings.session.attachUrlIncludes?.trim() || undefined,
+    waitForLogin: caseWaitForLogin.value,
+    loginWaitSeconds: settings.settings.session.loginWaitSeconds,
+  }
+}
+
+async function refreshBrowserTabs() {
+  browserTabsLoading.value = true
+  try {
+    const data = await fetchBrowserTabs(settings.settings.session.cdpEndpoint || undefined)
+    browserTabs.value = data.tabs || []
+    browserTabsHint.value = data.error
+      ? `${data.hint || '扫描失败'}（${data.error}）`
+      : data.hint || (data.tabs?.length ? `发现 ${data.tabs.length} 个可附着标签` : '未发现可附着标签')
+  } catch (error) {
+    browserTabs.value = []
+    browserTabsHint.value = error instanceof Error ? error.message : '无法探测浏览器标签'
+  } finally {
+    browserTabsLoading.value = false
+  }
+}
+
+function useBrowserTab(tab: { url: string; endpoint?: string; title?: string }) {
+  caseTargetUrl.value = tab.url
+  caseBrowserMode.value = 'attach'
+  settings.settings.session.targetUrl = tab.url
+  settings.settings.session.attachUrlIncludes = tab.url
+  settings.settings.session.browserMode = 'attach'
+  if (tab.endpoint) settings.settings.session.cdpEndpoint = tab.endpoint
+  browserTabsHint.value = `已选用标签：${tab.title || tab.url}`
+}
+
+function useCurrentBrowserTab() {
+  const first = browserTabs.value[0]
+  if (!first) {
+    browserTabsHint.value = '当前没有可附着标签，请先刷新或打开带远程调试的浏览器'
+    return
+  }
+  useBrowserTab(first)
 }
 
 function beginGeneration(kind: 'analyze' | 'cases', userText: string, assistantPlaceholder = '') {
@@ -298,7 +372,10 @@ function dismissGenerationPanel() {
 }
 
 const generationPanelTitle = computed(() => {
-  if (generationKind.value === 'cases') return 'AI 正在生成测试用例'
+  if (generationKind.value === 'cases') {
+    if (generationStatus.value.includes('探索')) return 'AI 正在探索目标页面'
+    return 'AI 正在生成测试用例'
+  }
   if (generationKind.value === 'analyze') return 'AI 正在分析功能点'
   return 'AI 生成过程'
 })
@@ -463,13 +540,37 @@ async function runGenerateTestCases() {
   const rootSnapshot = mindMapRef.value?.exportData() || mindMapData.value
   const featuresSnapshot = featureList.value.slice()
   const count = featuresSnapshot.length
+  const session = caseSessionPayload()
+  const targetLabel =
+    session?.targetUrl ||
+    (session?.browserMode === 'attach' ? '当前浏览器标签' : '')
+
+  // Keep browser-test settings in sync only when page grounding is enabled.
+  if (session) {
+    if (session.targetUrl) {
+      settings.settings.session.targetUrl = session.targetUrl
+      settings.settings.session.attachUrlIncludes =
+        session.attachUrlIncludes || session.targetUrl
+    }
+    settings.settings.session.browserMode = caseBrowserMode.value
+    settings.settings.session.waitForLogin = caseWaitForLogin.value
+  }
 
   beginGeneration(
     'cases',
-    `请根据当前 ${count} 个功能点生成可执行测试用例，输出 JSON。\n\n功能点摘要：\n${featuresSnapshot
-      .slice(0, 12)
-      .map((item, index) => `${index + 1}. ${item.path}`)
-      .join('\n')}${count > 12 ? `\n... 另有 ${count - 12} 个功能点` : ''}`,
+    [
+      targetLabel
+        ? `请基于目标页面（${targetLabel}）的真实探索结果，结合当前 ${count} 个功能点生成可执行测试用例。`
+        : `请根据当前 ${count} 个功能点生成可执行测试用例（未指定目标页面，仅基于功能点）。`,
+      '',
+      '功能点摘要：',
+      ...featuresSnapshot.slice(0, 12).map((item, index) => `${index + 1}. ${item.path}`),
+      ...(count > 12 ? [`... 另有 ${count - 12} 个功能点`] : []),
+      '',
+      targetLabel
+        ? '要求：先用 control-chrome 深度探索页面，步骤必须来自真实页面路径，禁止编造不存在的入口。'
+        : '提示：可在左侧填写目标 URL 或选用当前浏览器标签，以页面事实落地生成用例。',
+    ].join('\n'),
   )
 
   let gotResult = false
@@ -480,6 +581,7 @@ async function runGenerateTestCases() {
       summary: summary.value,
       root: rootSnapshot,
       features: featuresSnapshot,
+      session,
       handlers: {
         signal: generationAbort?.signal,
         onEvent(type, data) {
@@ -488,9 +590,26 @@ async function runGenerateTestCases() {
             const message = String(payload.message || '')
             generationStatus.value = message
             statusText.value = message
+          } else if (type === 'tool_start') {
+            const name = String(payload.name || 'tool')
+            const message = `浏览器操作：${name}`
+            generationStatus.value = message
+            statusText.value = message
+            appendAssistantDelta(`\n\n> 🔧 ${message}\n`)
+          } else if (type === 'tool_result') {
+            const name = String(payload.name || 'tool')
+            const result = (payload.result || {}) as Record<string, unknown>
+            const ok = result.ok === false ? '失败' : '完成'
+            const summaryText = String(result.summary || '')
+            const message = `浏览器${ok}：${name}${summaryText ? ` — ${summaryText}` : ''}`
+            generationStatus.value = message
+            statusText.value = message
+            appendAssistantDelta(`\n> ✅ ${message}\n`)
           } else if (type === 'delta') {
             appendAssistantDelta(String(payload.content || ''))
-            generationStatus.value = '模型正在输出测试用例 JSON...'
+            if (!generationStatus.value.includes('探索')) {
+              generationStatus.value = '模型正在输出测试用例 JSON...'
+            }
             statusText.value = generationStatus.value
           } else if (type === 'result') {
             const result = payload as unknown as GenerateTestCasesResult
@@ -500,7 +619,11 @@ async function runGenerateTestCases() {
             testCaseTitle.value = result.title
             testCaseSummary.value = result.summary
             mainTab.value = 'cases'
-            generationStatus.value = `已生成 ${result.caseCount} 条测试用例，可继续编辑后导出`
+            const grounded =
+              (result as GenerateTestCasesResult & { groundedInPage?: boolean }).groundedInPage
+                ? '（已基于真实页面探索）'
+                : ''
+            generationStatus.value = `已生成 ${result.caseCount} 条测试用例${grounded}，可继续编辑后导出`
             statusText.value = generationStatus.value
           } else if (type === 'error') {
             generationError.value = String(payload.message || '生成失败')
@@ -803,6 +926,71 @@ async function onTestCaseJsonFileChange(event: Event) {
           >
             {{ analyzing ? '取消分析' : extracting ? '解析文档中...' : 'AI 分析功能点' }}
           </button>
+
+          <div class="case-target">
+            <div class="case-target__head">
+              <span class="case-target__title">3. 目标页面（可选）</span>
+              <span class="case-target__badge">页面落地生成</span>
+            </div>
+            <label>
+              <span>目标 URL</span>
+              <input
+                v-model="caseTargetUrl"
+                type="url"
+                placeholder="https://example.com（可空：仅基于功能点）"
+                :disabled="generatingCases || analyzing"
+              />
+            </label>
+            <label>
+              <span>浏览器模式</span>
+              <select v-model="caseBrowserMode" :disabled="generatingCases || analyzing">
+                <option value="auto">自动：先附着已打开标签，失败再新开</option>
+                <option value="attach">只附着已打开标签（保留登录态）</option>
+                <option value="launch">只新开浏览器</option>
+              </select>
+            </label>
+            <label class="inline">
+              <input v-model="caseWaitForLogin" type="checkbox" :disabled="generatingCases || analyzing" />
+              <span>等待手动登录（与浏览器测试一致）</span>
+            </label>
+            <div class="case-target__actions">
+              <button
+                type="button"
+                class="ghost mini"
+                :disabled="browserTabsLoading || generatingCases || analyzing"
+                @click="refreshBrowserTabs"
+              >
+                {{ browserTabsLoading ? '扫描中…' : '刷新标签' }}
+              </button>
+              <button
+                type="button"
+                class="ghost mini"
+                :disabled="!browserTabs.length || generatingCases || analyzing"
+                @click="useCurrentBrowserTab"
+              >
+                使用当前标签
+              </button>
+            </div>
+            <p v-if="browserTabsHint" class="hint">{{ browserTabsHint }}</p>
+            <div v-if="browserTabs.length" class="tab-list">
+              <button
+                v-for="tab in browserTabs.slice(0, 6)"
+                :key="`${tab.endpoint}-${tab.index}-${tab.url}`"
+                type="button"
+                class="tab-chip"
+                :disabled="generatingCases || analyzing"
+                :title="tab.url"
+                @click="useBrowserTab(tab)"
+              >
+                <span class="tab-chip__title">{{ tab.title || '未命名标签' }}</span>
+                <span class="tab-chip__url">{{ tab.url }}</span>
+              </button>
+            </div>
+            <p class="hint">
+              填写 URL 或选用当前浏览器标签后，将用 control-chrome 深度探索真实页面再生成用例；留空则仅按功能点生成。
+            </p>
+          </div>
+
           <button
             type="button"
             class="secondary"
@@ -1262,6 +1450,137 @@ select:focus {
   flex-direction: column;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.case-target {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 4%, var(--panel-soft));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.case-target__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.case-target__title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.case-target__badge {
+  font-size: 11px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.case-target label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.case-target label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text);
+}
+
+.case-target label.inline input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.case-target label.inline span {
+  flex: 1 1 auto;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.case-target__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.case-target .mini {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.tab-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.tab-chip {
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+
+.tab-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.tab-chip:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.tab-chip__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-chip__url {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .llm-row label {

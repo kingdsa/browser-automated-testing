@@ -22,6 +22,36 @@ const llmSchema = z
   })
   .optional()
 
+const sessionSchema = z
+  .object({
+    targetUrl: z.string().url().optional().or(z.literal('')),
+    headless: z.boolean().optional(),
+    maxSteps: z.number().int().min(0).max(1000).optional(),
+    browserMode: z.enum(['auto', 'launch', 'attach']).optional(),
+    cdpEndpoint: z.string().optional().or(z.literal('')),
+    attachUrlIncludes: z.string().optional().or(z.literal('')),
+    waitForLogin: z.boolean().optional(),
+    loginWaitSeconds: z.number().int().min(10).max(900).optional(),
+  })
+  .optional()
+
+function resolveSession(bodySession?: z.infer<typeof sessionSchema>) {
+  if (!bodySession) return undefined
+  const targetUrl = bodySession.targetUrl?.trim() || undefined
+  const cdpEndpoint = bodySession.cdpEndpoint?.trim() || undefined
+  const attachUrlIncludes = bodySession.attachUrlIncludes?.trim() || targetUrl || undefined
+  return {
+    targetUrl,
+    headless: bodySession.headless,
+    maxSteps: bodySession.maxSteps,
+    browserMode: bodySession.browserMode,
+    cdpEndpoint,
+    attachUrlIncludes,
+    waitForLogin: bodySession.waitForLogin,
+    loginWaitSeconds: bodySession.loginWaitSeconds,
+  }
+}
+
 function resolveLlm(bodyLlm?: { baseUrl?: string; apiKey?: string; model?: string }) {
   return {
     baseUrl: bodyLlm?.baseUrl || config.defaultLlm.baseUrl,
@@ -156,6 +186,11 @@ requirementsRouter.post('/requirements/test-cases', async (req, res) => {
     }
 
     const llm = resolveLlm(llmParsed.data)
+    const sessionParsed = sessionSchema.safeParse(req.body?.session)
+    if (!sessionParsed.success) {
+      res.status(400).json({ error: 'session 参数无效', details: sessionParsed.error.flatten() })
+      return
+    }
     const title = typeof req.body?.title === 'string' ? req.body.title : ''
     const summary = typeof req.body?.summary === 'string' ? req.body.summary : ''
     const root = req.body?.root
@@ -172,6 +207,7 @@ requirementsRouter.post('/requirements/test-cases', async (req, res) => {
       summary,
       root,
       features,
+      session: resolveSession(sessionParsed.data),
     })
 
     res.json({
@@ -277,6 +313,13 @@ requirementsRouter.post('/requirements/test-cases/stream', async (req, res) => {
     }
 
     const llm = resolveLlm(llmParsed.data)
+    const sessionParsed = sessionSchema.safeParse(req.body?.session)
+    if (!sessionParsed.success) {
+      writeEvent({ type: 'error', data: { message: 'session 参数无效' } })
+      writeEvent({ type: 'done', data: {} })
+      res.end()
+      return
+    }
     const title = typeof req.body?.title === 'string' ? req.body.title : ''
     const summary = typeof req.body?.summary === 'string' ? req.body.summary : ''
     const root = req.body?.root
@@ -295,6 +338,7 @@ requirementsRouter.post('/requirements/test-cases/stream', async (req, res) => {
       summary,
       root,
       features,
+      session: resolveSession(sessionParsed.data),
       signal: abortController.signal,
       onEvent: (event) => writeEvent(event),
     })
