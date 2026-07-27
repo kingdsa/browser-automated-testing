@@ -53,13 +53,13 @@ async function saveReport() {
   if (!canSave.value || saving.value) return
   const content = lastAssistantMarkdown.value
   if (!content) {
-    flashTip('暂无 AI 的 Markdown 文档可保存，请先让 AI 输出 MD 报告')
+    flashTip('暂无最终 Markdown 报告可保存（过程分析不会被保存）')
     return
   }
   saving.value = true
   try {
     const result = await saveMarkdownFile(content, defaultReportName())
-    flashTip(result === 'picked' ? '已保存最后一次 AI 的 MD 文档' : '当前浏览器不支持选目录，已下载最后一次 AI 的 MD 文档')
+    flashTip(result === 'picked' ? '已保存最终 Markdown 报告' : '当前浏览器不支持选目录，已下载最终 Markdown 报告')
   } catch (error) {
     if ((error as Error)?.name === 'AbortError') {
       // 用户在保存对话框点了取消，无需提示
@@ -90,7 +90,7 @@ async function saveReport() {
           type="button"
           class="btn ghost save"
           :disabled="!canSave || saving"
-          :title="canSave ? '仅保存最后一次 AI 输出的 Markdown 文档' : '请先让 AI 输出完整 MD 文档后再保存'"
+          :title="canSave ? '仅保存最终 Markdown 报告，不含过程分析' : '请先让 AI 输出完整最终 MD 报告后再保存'"
           @click="saveReport"
         >
           {{ saving ? '保存中...' : '保存本次测试结果' }}

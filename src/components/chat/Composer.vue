@@ -243,7 +243,7 @@ async function onDrop(event: DragEvent) {
           title="点击删除此提示"
           @click="dismissTip('save-report')"
         >
-          <span>保存结果只会保留最后一次 AI 的 MD 文档，请在输入中明确要求：输出完整 Markdown 报告</span>
+          <span>保存结果只会保留最终 Markdown 报告（不含过程分析），请明确要求：最后输出完整 Markdown 报告</span>
           <span class="tip__close" aria-hidden="true">×</span>
         </button>
       </div>

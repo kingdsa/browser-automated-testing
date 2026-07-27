@@ -2,11 +2,51 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { streamChat } from '@/api/agent'
 import { useSettingsStore } from '@/stores/settings'
-import type { ChatAttachment, ChatMessageItem, ToolTrace } from '@/types/chat'
+import type {
+  ChatAttachment,
+  ChatMessageItem,
+  ChatMessageSegment,
+  ToolTrace,
+} from '@/types/chat'
 import { buildPromptWithTestCase } from '@/utils/testCases'
 
 function uid(prefix = 'm') {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+function ensureOpenSegment(assistant: ChatMessageItem): ChatMessageSegment {
+  if (!assistant.segments) assistant.segments = []
+  const last = assistant.segments[assistant.segments.length - 1]
+  if (last?.streaming) return last
+
+  const segment: ChatMessageSegment = {
+    id: uid('seg'),
+    kind: 'analysis',
+    content: '',
+    streaming: true,
+  }
+  assistant.segments.push(segment)
+  return segment
+}
+
+function closeOpenSegment(
+  assistant: ChatMessageItem,
+  kind: ChatMessageSegment['kind'] = 'analysis',
+) {
+  const last = assistant.segments?.[assistant.segments.length - 1]
+  if (!last?.streaming) return
+  last.streaming = false
+  last.kind = kind
+}
+
+function finalizeAssistantSegments(assistant: ChatMessageItem, asReport: boolean) {
+  const last = assistant.segments?.[assistant.segments.length - 1]
+  if (!last) return
+  if (last.streaming || asReport) {
+    last.streaming = false
+    if (asReport && last.content.trim()) last.kind = 'report'
+    else if (!last.content.trim()) last.kind = 'analysis'
+  }
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -59,6 +99,7 @@ export const useChatStore = defineStore('chat', () => {
       role: 'assistant',
       content: '',
       streaming: true,
+      segments: [],
       tools: [],
       createdAt: Date.now(),
     })
@@ -76,6 +117,7 @@ export const useChatStore = defineStore('chat', () => {
 
     isRunning.value = true
     abortController = new AbortController()
+    let finishedNaturally = false
 
     const ensureAssistant = () => {
       let msg = messages.value.find((m) => m.id === assistantId)
@@ -85,12 +127,14 @@ export const useChatStore = defineStore('chat', () => {
           role: 'assistant',
           content: '',
           streaming: true,
+          segments: [],
           tools: [],
           createdAt: Date.now(),
         }
         messages.value.push(msg)
       }
       if (!msg.tools) msg.tools = []
+      if (!msg.segments) msg.segments = []
       return msg
     }
 
@@ -105,16 +149,29 @@ export const useChatStore = defineStore('chat', () => {
             const assistant = ensureAssistant()
 
             if (type === 'delta') {
-              assistant.content += String(payload.content || '')
+              const text = String(payload.content || '')
+              if (!text) return
+              assistant.content += text
+              const segment = ensureOpenSegment(assistant)
+              segment.content += text
               return
             }
 
             if (type === 'status') {
-              statusText.value = String(payload.message || '')
+              const message = String(payload.message || '')
+              statusText.value = message
+              // Final natural completion signal from the agent runner.
+              if (message.includes('已生成结论') || message.includes('测试完成')) {
+                finishedNaturally = true
+                // Promote as soon as the runner confirms no more tool calls.
+                finalizeAssistantSegments(assistant, true)
+              }
               return
             }
 
             if (type === 'tool_start') {
+              // Text before tools is intermediate analysis, not the final report.
+              closeOpenSegment(assistant, 'analysis')
               const tool: ToolTrace = {
                 id: String(payload.id || ''),
                 name: String(payload.name || 'tool'),
@@ -159,7 +216,8 @@ export const useChatStore = defineStore('chat', () => {
 
             if (type === 'done') {
               assistant.streaming = false
-              statusText.value = '完成'
+              finalizeAssistantSegments(assistant, finishedNaturally || !assistant.tools?.length)
+              statusText.value = statusText.value || '完成'
             }
           },
         },
@@ -176,6 +234,21 @@ export const useChatStore = defineStore('chat', () => {
         assistant.streaming = false
         if (!assistant.content && !assistant.tools?.length) {
           assistant.content = errorText.value || '本次没有生成文本结论。'
+          assistant.segments = [
+            {
+              id: uid('seg'),
+              kind: 'analysis',
+              content: assistant.content,
+              streaming: false,
+            },
+          ]
+        } else {
+          // Abort keeps the open segment as analysis; natural finish promotes it to report.
+          const aborted = statusText.value === '已停止'
+          finalizeAssistantSegments(
+            assistant,
+            !aborted && (finishedNaturally || !assistant.tools?.length),
+          )
         }
       }
       isRunning.value = false

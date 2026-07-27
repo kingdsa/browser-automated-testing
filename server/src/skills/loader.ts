@@ -73,8 +73,9 @@ export function buildSystemPrompt(skills: SkillMeta[], targetUrl?: string): stri
     '- 发现问题时要记录：现象、定位证据、严重级别（critical/major/minor）、建议。',
     '- 不要无限点点点；优先覆盖核心路径，达到足够证据后及时汇总。',
     '- 对破坏性操作（提交订单、删除、支付）要谨慎，默认只做只读验证，除非用户明确要求。',
-    '- 输出使用中文，过程中可简要说明当前测试意图。',
-    '- 最终结论必须输出一份完整、可直接保存的 Markdown 文档（用户会单独保存最后一次 AI 的 MD 内容）。',
+    '- 输出使用中文。过程分析与最终报告必须分开：工具调用之间只写简短测试意图/观察，不要写成完整报告。',
+    '- 全部测试结束后，再单独输出一份完整、可直接保存的 Markdown 最终报告（作为最后一次无工具调用的回复主体）。',
+    '- 用户只会保存最终 Markdown 报告，不会保存过程分析；因此最终报告必须自包含、可单独阅读。',
     '- Markdown 报告建议包含：测试目标、覆盖范围、问题列表（级别/现象/证据/建议）、结论与风险。',
     '- 若用户消息附带【测试用例附件】或明确给出用例清单：必须按用例逐条执行（优先级 P0>P1>P2>P3），不要只做自由探索。',
     '- 有测试用例时，最终 Markdown 报告必须包含「用例执行对照表」：用例 ID / 标题 / 结果(通过|失败|阻塞) / 证据 / 备注。',
@@ -95,6 +96,6 @@ export function buildSystemPrompt(skills: SkillMeta[], targetUrl?: string): stri
     '3. get_network_logs / get_console_logs 检查接口与错误',
     '4. 按测试路径 click / type / scroll / wait',
     '5. take_screenshot 记录关键证据',
-    '6. 输出完整 Markdown 测试报告（作为最后一次回复主体）',
+    '6. 输出完整 Markdown 最终报告（最后一次回复只写报告，不要夹杂过程碎语）',
   ].join('\n')
 }

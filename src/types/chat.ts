@@ -22,6 +22,16 @@ export interface ToolTrace {
   status: 'running' | 'done' | 'error'
 }
 
+/** Streamed assistant text blocks: intermediate analysis vs final Markdown report. */
+export type ChatSegmentKind = 'analysis' | 'report'
+
+export interface ChatMessageSegment {
+  id: string
+  kind: ChatSegmentKind
+  content: string
+  streaming?: boolean
+}
+
 export interface ChatMessageItem {
   id: string
   role: MessageRole
@@ -29,6 +39,8 @@ export interface ChatMessageItem {
   /** UI-only attachment meta (full content may be embedded into content for the model). */
   attachments?: ChatAttachment[]
   streaming?: boolean
+  /** Text segments split around tool calls; report segments are the savable final MD. */
+  segments?: ChatMessageSegment[]
   tools?: ToolTrace[]
   createdAt: number
 }

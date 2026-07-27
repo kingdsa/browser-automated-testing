@@ -28,20 +28,30 @@ export function formatStamp(ts: number): string {
 }
 
 /**
- * 提取会话中最后一次 AI 完整回复，作为要保存的 Markdown 文档。
- * 不拼接多轮结论 / 工具过程，只保留最后一次 AI 输出。
+ * 仅提取最终 Markdown 报告（report 分段）。
+ * 过程分析 / 工具日志不参与保存。
+ * 兼容旧消息：没有 segments 时回退到整段 assistant content。
  */
 export function getLastAssistantMarkdown(messages: ChatMessageItem[]): string | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i]
-    if (
-      message &&
-      message.role === 'assistant' &&
-      !message.streaming &&
-      message.content.trim()
-    ) {
-      return message.content.trim()
+    if (!message || message.role !== 'assistant' || message.streaming) continue
+
+    const segments = message.segments || []
+    if (segments.length) {
+      const report = segments
+        .filter((segment) => segment.kind === 'report')
+        .map((segment) => segment.content.trim())
+        .filter(Boolean)
+        .join('\n\n')
+        .trim()
+      if (report) return report
+      // Has structured segments but no final report yet — do not save analysis as the report.
+      continue
     }
+
+    const legacy = message.content.trim()
+    if (legacy) return legacy
   }
   return null
 }
