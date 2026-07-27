@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import type { ChatMessageItem, ChatMessageSegment, ToolTrace } from '@/types/chat'
 import { renderMarkdown } from '@/utils/markdown'
 import { formatAttachmentSize } from '@/utils/testCases'
@@ -9,11 +9,9 @@ const props = defineProps<{
 }>()
 
 const scroller = ref<HTMLElement | null>(null)
-const toolsScrollers = new Map<string, HTMLElement>()
-const toolsObservers = new Map<string, ResizeObserver>()
 const collapsedBlockIds = reactive(new Set<string>())
 const pinnedToBottom = ref(true)
-const BOTTOM_THRESHOLD = 80
+const BOTTOM_THRESHOLD = 96
 
 type RenderBlock =
   | {
@@ -63,73 +61,22 @@ function isCollapsed(blockId: string) {
   return collapsedBlockIds.has(blockId)
 }
 
-function toggleBlock(blockId: string) {
+async function toggleBlock(blockId: string, event: Event) {
+  const el = scroller.value
+  const target = event.currentTarget
+  const blockEl = target instanceof HTMLElement ? target.closest('.message') : null
+  const prevTop = blockEl instanceof HTMLElement && el ? blockEl.getBoundingClientRect().top : null
+  const prevScrollTop = el?.scrollTop ?? 0
+
   if (collapsedBlockIds.has(blockId)) collapsedBlockIds.delete(blockId)
   else collapsedBlockIds.add(blockId)
-}
 
-function disconnectToolsObserver(messageId: string) {
-  const observer = toolsObservers.get(messageId)
-  if (observer) {
-    observer.disconnect()
-    toolsObservers.delete(messageId)
-  }
-}
-
-function scrollToolsListToLatest(el: HTMLElement) {
-  const last = el.lastElementChild as HTMLElement | null
-  if (!last) {
-    el.scrollTop = el.scrollHeight
-    return
-  }
-
-  const pad = 16
-  const elRect = el.getBoundingClientRect()
-  const lastRect = last.getBoundingClientRect()
-  const overflowBottom = lastRect.bottom - elRect.bottom
-  const overflowTop = elRect.top - lastRect.top
-
-  if (overflowBottom > -pad) {
-    el.scrollTop += overflowBottom + pad
-  } else if (overflowTop > 0) {
-    el.scrollTop -= overflowTop + pad
-  }
-
-  const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight)
-  if (el.scrollTop < maxScroll) {
-    el.scrollTop = maxScroll
-  }
-}
-
-function observeToolsList(messageId: string, el: HTMLElement) {
-  disconnectToolsObserver(messageId)
-  const observer = new ResizeObserver(() => {
-    if (!pinnedToBottom.value) return
-    scrollToolsListToLatest(el)
-    if (scroller.value && pinnedToBottom.value) {
-      scroller.value.scrollTop = scroller.value.scrollHeight
-    }
-  })
-  observer.observe(el)
-  const last = el.lastElementChild
-  if (last instanceof HTMLElement) observer.observe(last)
-  toolsObservers.set(messageId, observer)
-}
-
-function setToolsScroller(messageId: string, el: Element | null) {
-  if (el instanceof HTMLElement) {
-    toolsScrollers.set(messageId, el)
-    observeToolsList(messageId, el)
-    return
-  }
-  toolsScrollers.delete(messageId)
-  disconnectToolsObserver(messageId)
-}
-
-function scrollAllToolsToLatest() {
-  for (const el of toolsScrollers.values()) {
-    scrollToolsListToLatest(el)
-  }
+  // Expanding/collapsing a large analysis block should not jump the page.
+  await nextTick()
+  if (!el || prevTop == null || !(blockEl instanceof HTMLElement)) return
+  const nextTop = blockEl.getBoundingClientRect().top
+  el.scrollTop = prevScrollTop + (nextTop - prevTop)
+  pinnedToBottom.value = isNearBottom(el)
 }
 
 function scrollToBottom(force = false) {
@@ -141,20 +88,12 @@ function scrollToBottom(force = false) {
 
 function scheduleScrollToLatest(force = false) {
   if (!force && !pinnedToBottom.value) return
-
   const run = () => {
     if (!force && !pinnedToBottom.value) return
-    scrollAllToolsToLatest()
     scrollToBottom(force)
   }
-
   run()
-  requestAnimationFrame(() => {
-    run()
-    requestAnimationFrame(run)
-  })
-  window.setTimeout(run, 40)
-  window.setTimeout(run, 140)
+  requestAnimationFrame(run)
 }
 
 function jumpToLatest() {
@@ -188,20 +127,11 @@ watch(
       })
       .join('|'),
   async () => {
+    if (!pinnedToBottom.value) return
     await nextTick()
-    for (const [messageId, el] of toolsScrollers.entries()) {
-      observeToolsList(messageId, el)
-    }
     scheduleScrollToLatest(false)
   },
 )
-
-onBeforeUnmount(() => {
-  for (const messageId of [...toolsObservers.keys()]) {
-    disconnectToolsObserver(messageId)
-  }
-  toolsScrollers.clear()
-})
 
 function screenshotSrc(tool: ToolTrace) {
   if (tool.screenshotBase64) return `data:image/png;base64,${tool.screenshotBase64}`
@@ -246,7 +176,6 @@ function buildBlocks(messages: ChatMessageItem[]): RenderBlock[] {
 
     const segments = message.segments || []
     if (!segments.length) {
-      // Legacy / fallback single assistant bubble.
       if (message.content || message.tools?.length || message.streaming) {
         blocks.push({
           id: `legacy:${message.id}`,
@@ -257,8 +186,12 @@ function buildBlocks(messages: ChatMessageItem[]): RenderBlock[] {
       continue
     }
 
-    const analysis = segments.filter((segment) => segment.kind === 'analysis' && (segment.content || segment.streaming))
-    const report = segments.filter((segment) => segment.kind === 'report' && (segment.content || segment.streaming))
+    const analysis = segments.filter(
+      (segment) => segment.kind === 'analysis' && (segment.content || segment.streaming),
+    )
+    const report = segments.filter(
+      (segment) => segment.kind === 'report' && (segment.content || segment.streaming),
+    )
 
     if (analysis.length) {
       blocks.push({
@@ -286,7 +219,6 @@ function buildBlocks(messages: ChatMessageItem[]): RenderBlock[] {
         segments: report,
       })
     } else if (!analysis.length && message.streaming) {
-      // Waiting for the first tokens.
       blocks.push({
         id: `analysis:${message.id}`,
         type: 'analysis',
@@ -306,6 +238,8 @@ function buildBlocks(messages: ChatMessageItem[]): RenderBlock[] {
   return blocks
 }
 
+const blocks = computed(() => buildBlocks(props.messages))
+
 function blockTitle(block: RenderBlock) {
   if (block.type === 'user') return '你'
   if (block.type === 'analysis') {
@@ -321,6 +255,12 @@ function blockStreaming(block: RenderBlock) {
   if (block.type === 'analysis' || block.type === 'report') return segmentStreaming(block.segments)
   if (block.type === 'tools') return block.tools.some((tool) => tool.status === 'running')
   return Boolean(block.message.streaming)
+}
+
+function toolStatusLabel(tool: ToolTrace) {
+  if (tool.status === 'running') return '执行中'
+  if (tool.ok === false || tool.status === 'error') return '失败'
+  return '完成'
 }
 </script>
 
@@ -342,7 +282,7 @@ function blockStreaming(block: RenderBlock) {
       </div>
 
       <article
-        v-for="block in buildBlocks(messages)"
+        v-for="block in blocks"
         :key="block.id"
         class="message"
         :class="[
@@ -356,17 +296,17 @@ function blockStreaming(block: RenderBlock) {
           class="meta"
           :aria-expanded="!isCollapsed(block.id)"
           :title="isCollapsed(block.id) ? '展开内容' : '收起内容'"
-          @click="toggleBlock(block.id)"
+          @click="toggleBlock(block.id, $event)"
         >
           <span class="meta__labels">
             <span class="role">{{ blockTitle(block) }}</span>
             <span v-if="blockStreaming(block)" class="streaming">输出中...</span>
-            <span v-if="block.type === 'tools'" class="tools-count">{{ block.tools.length }}</span>
+            <span v-if="block.type === 'tools'" class="count-pill">{{ block.tools.length }}</span>
           </span>
           <span class="collapse-icon" aria-hidden="true" />
         </button>
 
-        <template v-if="!isCollapsed(block.id)">
+        <div v-if="!isCollapsed(block.id)" class="message-body">
           <template v-if="block.type === 'user'">
             <div
               v-if="displayContent(block.message)"
@@ -391,7 +331,7 @@ function blockStreaming(block: RenderBlock) {
           <template v-else-if="block.type === 'analysis' || block.type === 'report'">
             <div
               v-if="joinSegmentContent(block.segments)"
-              class="content markdown-body"
+              class="content markdown-body scrollable-body"
               :class="{ 'report-body': block.type === 'report' }"
               v-html="renderMarkdown(joinSegmentContent(block.segments))"
             />
@@ -399,86 +339,90 @@ function blockStreaming(block: RenderBlock) {
           </template>
 
           <template v-else-if="block.type === 'tools'">
-            <div class="tools">
-              <div
-                class="tools-list"
-                :ref="(el) => setToolsScroller(block.messageId, el as Element | null)"
+            <div class="tools-list">
+              <details
+                v-for="(tool, index) in block.tools"
+                :key="`${block.messageId}_${tool.id || tool.name}_${index}`"
+                class="tool"
+                :class="tool.status"
+                :open="tool.status === 'running'"
               >
-                <details
-                  v-for="(tool, index) in block.tools"
-                  :key="`${block.messageId}_${tool.id || tool.name}_${index}`"
-                  class="tool"
-                  :class="tool.status"
-                  :open="tool.status === 'running' || index === block.tools.length - 1"
-                >
-                  <summary>
-                    <span class="tool-index">{{ index + 1 }}</span>
-                    <span class="tool-main">
-                      <span class="tool-name">{{ tool.name }}</span>
-                      <span v-if="tool.summary" class="tool-summary-inline">{{ tool.summary }}</span>
-                    </span>
-                    <span class="tool-status" :class="tool.status">{{
-                      tool.status === 'running' ? '执行中' : tool.ok === false ? '失败' : '完成'
+                <summary>
+                  <span class="tool-index">{{ index + 1 }}</span>
+                  <span class="tool-main">
+                    <span class="tool-name">{{ tool.name }}</span>
+                    <span v-if="tool.summary" class="tool-summary-inline" :title="tool.summary">{{
+                      tool.summary
                     }}</span>
-                  </summary>
-                  <div class="tool-body">
-                    <pre v-if="tool.arguments" class="code">{{ tool.arguments }}</pre>
-                    <pre v-if="tool.data" class="code">{{ JSON.stringify(tool.data, null, 2) }}</pre>
-                    <img
-                      v-if="screenshotSrc(tool)"
-                      class="shot"
-                      :src="screenshotSrc(tool)"
-                      alt="screenshot"
-                    />
+                  </span>
+                  <span class="tool-status" :class="tool.status">{{ toolStatusLabel(tool) }}</span>
+                </summary>
+                <div class="tool-body">
+                  <div v-if="tool.arguments" class="tool-section">
+                    <div class="tool-section__label">参数</div>
+                    <pre class="code">{{ tool.arguments }}</pre>
                   </div>
-                </details>
-              </div>
+                  <div v-if="tool.data" class="tool-section">
+                    <div class="tool-section__label">结果</div>
+                    <pre class="code">{{ JSON.stringify(tool.data, null, 2) }}</pre>
+                  </div>
+                  <div v-if="screenshotSrc(tool)" class="tool-section">
+                    <div class="tool-section__label">截图</div>
+                    <img class="shot" :src="screenshotSrc(tool)" alt="screenshot" />
+                  </div>
+                  <div
+                    v-if="!tool.arguments && !tool.data && !screenshotSrc(tool) && tool.summary"
+                    class="tool-empty"
+                  >
+                    {{ tool.summary }}
+                  </div>
+                </div>
+              </details>
             </div>
           </template>
 
           <template v-else>
             <div
               v-if="displayContent(block.message)"
-              class="content markdown-body"
+              class="content markdown-body scrollable-body"
               v-html="renderMarkdown(displayContent(block.message))"
             />
-            <div v-if="block.message.tools?.length" class="tools">
-              <div
-                class="tools-list"
-                :ref="(el) => setToolsScroller(block.message.id, el as Element | null)"
+            <div v-if="block.message.tools?.length" class="tools-list legacy-tools">
+              <details
+                v-for="(tool, index) in block.message.tools"
+                :key="`${block.message.id}_${tool.id || tool.name}_${index}`"
+                class="tool"
+                :class="tool.status"
+                :open="tool.status === 'running'"
               >
-                <details
-                  v-for="(tool, index) in block.message.tools"
-                  :key="`${block.message.id}_${tool.id || tool.name}_${index}`"
-                  class="tool"
-                  :class="tool.status"
-                  :open="tool.status === 'running' || index === (block.message.tools?.length || 0) - 1"
-                >
-                  <summary>
-                    <span class="tool-index">{{ index + 1 }}</span>
-                    <span class="tool-main">
-                      <span class="tool-name">{{ tool.name }}</span>
-                      <span v-if="tool.summary" class="tool-summary-inline">{{ tool.summary }}</span>
-                    </span>
-                    <span class="tool-status" :class="tool.status">{{
-                      tool.status === 'running' ? '执行中' : tool.ok === false ? '失败' : '完成'
+                <summary>
+                  <span class="tool-index">{{ index + 1 }}</span>
+                  <span class="tool-main">
+                    <span class="tool-name">{{ tool.name }}</span>
+                    <span v-if="tool.summary" class="tool-summary-inline" :title="tool.summary">{{
+                      tool.summary
                     }}</span>
-                  </summary>
-                  <div class="tool-body">
-                    <pre v-if="tool.arguments" class="code">{{ tool.arguments }}</pre>
-                    <pre v-if="tool.data" class="code">{{ JSON.stringify(tool.data, null, 2) }}</pre>
-                    <img
-                      v-if="screenshotSrc(tool)"
-                      class="shot"
-                      :src="screenshotSrc(tool)"
-                      alt="screenshot"
-                    />
+                  </span>
+                  <span class="tool-status" :class="tool.status">{{ toolStatusLabel(tool) }}</span>
+                </summary>
+                <div class="tool-body">
+                  <div v-if="tool.arguments" class="tool-section">
+                    <div class="tool-section__label">参数</div>
+                    <pre class="code">{{ tool.arguments }}</pre>
                   </div>
-                </details>
-              </div>
+                  <div v-if="tool.data" class="tool-section">
+                    <div class="tool-section__label">结果</div>
+                    <pre class="code">{{ JSON.stringify(tool.data, null, 2) }}</pre>
+                  </div>
+                  <div v-if="screenshotSrc(tool)" class="tool-section">
+                    <div class="tool-section__label">截图</div>
+                    <img class="shot" :src="screenshotSrc(tool)" alt="screenshot" />
+                  </div>
+                </div>
+              </details>
             </div>
           </template>
-        </template>
+        </div>
       </article>
     </div>
 
@@ -496,20 +440,23 @@ function blockStreaming(block: RenderBlock) {
 <style scoped>
 .list-wrap {
   position: relative;
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .list {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
-  padding: 18px 20px 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 18px 20px 20px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
@@ -600,12 +547,14 @@ function blockStreaming(block: RenderBlock) {
 }
 
 .message {
+  flex: 0 0 auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--panel) 92%, transparent);
-  padding: 14px 16px;
+  padding: 12px 14px;
   box-shadow: var(--shadow-xs);
   animation: fade-up 0.35s var(--ease-out) both;
+  min-width: 0;
 }
 
 .message.user {
@@ -630,6 +579,10 @@ function blockStreaming(block: RenderBlock) {
   border-color: color-mix(in srgb, var(--accent-secondary) 22%, var(--border));
 }
 
+.message.tools {
+  border-color: color-mix(in srgb, var(--border) 90%, var(--accent) 10%);
+}
+
 .message.collapsed {
   padding-bottom: 12px;
 }
@@ -640,7 +593,7 @@ function blockStreaming(block: RenderBlock) {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 0;
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -650,8 +603,8 @@ function blockStreaming(block: RenderBlock) {
   cursor: pointer;
 }
 
-.message.collapsed .meta {
-  margin-bottom: 0;
+.message:not(.collapsed) .meta {
+  margin-bottom: 10px;
 }
 
 .meta:focus-visible {
@@ -682,7 +635,8 @@ function blockStreaming(block: RenderBlock) {
   color: var(--accent-secondary);
 }
 
-.message.report .role {
+.message.report .role,
+.message.tools .role {
   color: var(--accent);
 }
 
@@ -695,6 +649,21 @@ function blockStreaming(block: RenderBlock) {
   border-radius: var(--radius-pill);
   padding: 2px 8px;
   animation: pulse-soft 1.4s ease-in-out infinite;
+}
+
+.count-pill {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .collapse-icon {
@@ -729,11 +698,24 @@ function blockStreaming(block: RenderBlock) {
   color: var(--text);
 }
 
+.message-body {
+  min-width: 0;
+}
+
 .content {
   font-size: 14px;
   line-height: 1.7;
   word-break: break-word;
   color: var(--text);
+}
+
+/* Keep huge analysis/report from swallowing the whole page. */
+.scrollable-body {
+  max-height: min(42vh, 480px);
+  overflow: auto;
+  /* Allow wheel to continue scrolling the outer message list after reaching edges. */
+  overscroll-behavior: auto;
+  padding-right: 4px;
 }
 
 .content.placeholder {
@@ -742,7 +724,7 @@ function blockStreaming(block: RenderBlock) {
 }
 
 .report-body {
-  padding: 4px 2px 0;
+  padding-top: 2px;
 }
 
 .attachments {
@@ -857,6 +839,7 @@ function blockStreaming(block: RenderBlock) {
   background: var(--code-bg);
   color: var(--code-text);
   overflow: auto;
+  max-height: 240px;
   font-size: 12px;
   line-height: 1.5;
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
@@ -900,70 +883,46 @@ function blockStreaming(block: RenderBlock) {
   border-radius: var(--radius-md);
 }
 
-.tools {
-  margin-top: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--panel-soft) 88%, transparent);
-  overflow: hidden;
-}
-
-.tools-count {
-  min-width: 18px;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-}
-
 .tools-list {
   display: flex;
   flex-direction: column;
-  max-height: min(48vh, 420px);
-  overflow: auto;
-  padding: 0 0 20px;
-  scroll-padding-bottom: 20px;
-  scrollbar-gutter: stable;
+  gap: 8px;
+  min-width: 0;
+}
+
+.legacy-tools {
+  margin-top: 10px;
 }
 
 .tool {
-  border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  background: transparent;
-  padding: 0;
-  scroll-margin-bottom: 16px;
-}
-
-.tool:last-child {
-  border-bottom: 0;
-  margin-bottom: 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel-soft) 90%, transparent);
+  overflow: hidden;
+  min-width: 0;
 }
 
 .tool.running {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel-soft));
 }
 
 .tool.error {
-  background: color-mix(in srgb, var(--error) 8%, transparent);
+  border-color: color-mix(in srgb, var(--error) 30%, var(--border));
+  background: color-mix(in srgb, var(--error) 7%, var(--panel-soft));
 }
 
 summary {
   cursor: pointer;
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 10px;
+  padding: 10px 12px;
   font-size: 12px;
   line-height: 1.35;
   list-style: none;
+  min-width: 0;
 }
 
 summary::-webkit-details-marker {
@@ -971,32 +930,34 @@ summary::-webkit-details-marker {
 }
 
 .tool-index {
-  width: 18px;
-  height: 18px;
-  border-radius: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--muted);
-  background: color-mix(in srgb, var(--border) 60%, transparent);
+  background: color-mix(in srgb, var(--border) 55%, transparent);
   font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
 
 .tool-main {
   min-width: 0;
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .tool-name {
-  flex: 0 0 auto;
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-summary-inline {
@@ -1011,26 +972,63 @@ summary::-webkit-details-marker {
 .tool-status {
   flex: 0 0 auto;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: color-mix(in srgb, var(--panel) 80%, transparent);
+  border: 1px solid var(--border);
 }
 
 .tool-status.running {
   color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--accent-soft);
   animation: pulse-soft 1.3s ease-in-out infinite;
+}
+
+.tool-status.done {
+  color: var(--text-secondary);
 }
 
 .tool-status.error,
 .tool.error .tool-status {
   color: var(--error-text);
+  border-color: var(--error-border);
+  background: var(--error-soft);
 }
 
 .tool-body {
-  padding: 0 12px 12px 38px;
+  padding: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
+}
+
+.tool-section__label {
+  margin: 10px 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tool-section:first-child .tool-section__label {
+  margin-top: 10px;
+}
+
+.tool-empty {
+  padding-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .code {
-  margin: 0 0 8px;
+  margin: 0;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   background: var(--code-bg);
@@ -1041,17 +1039,14 @@ summary::-webkit-details-marker {
   line-height: 1.45;
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-}
-
-.code:last-child {
-  margin-bottom: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .shot {
   display: block;
-  margin-top: 2px;
   max-width: 100%;
-  max-height: 220px;
+  max-height: 240px;
   object-fit: contain;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);

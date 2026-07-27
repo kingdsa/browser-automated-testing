@@ -1,16 +1,7 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import MessageList from '../chat/MessageList.vue'
 import type { ChatMessageItem } from '@/types/chat'
-
-class ResizeObserverMock {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-
-// jsdom does not implement ResizeObserver used by the tools scroller.
-vi.stubGlobal('ResizeObserver', ResizeObserverMock)
 
 const baseMessages: ChatMessageItem[] = [
   {
@@ -55,6 +46,7 @@ describe('MessageList', () => {
   it('renders analysis, tools and final report as separate collapsible blocks', async () => {
     const wrapper = mount(MessageList, {
       props: { messages: baseMessages },
+      attachTo: document.body,
     })
 
     const titles = wrapper.findAll('.role').map((node) => node.text())
@@ -63,16 +55,24 @@ describe('MessageList', () => {
     expect(titles).toContain('工具调用')
     expect(titles).toContain('最终 Markdown 报告')
     expect(wrapper.text()).toContain('先打开页面，检查布局。')
+    expect(wrapper.text()).toContain('open_url')
     expect(wrapper.text()).toContain('测试报告')
 
-    const toggles = wrapper.findAll('.meta')
-    const analysisToggle = toggles.find((node) => node.text().includes('AI 分析过程'))
+    const analysisToggle = wrapper.findAll('.meta').find((node) => node.text().includes('AI 分析过程'))
     expect(analysisToggle?.attributes('aria-expanded')).toBe('true')
 
     await analysisToggle?.trigger('click')
     expect(analysisToggle?.attributes('aria-expanded')).toBe('false')
     expect(wrapper.findAll('.message.analysis.collapsed').length).toBe(1)
     expect(wrapper.text()).not.toContain('先打开页面，检查布局。')
+    // Tools remain visible after collapsing analysis.
+    expect(wrapper.text()).toContain('open_url')
     expect(wrapper.text()).toContain('测试报告')
+
+    await analysisToggle?.trigger('click')
+    expect(wrapper.text()).toContain('先打开页面，检查布局。')
+    expect(wrapper.text()).toContain('open_url')
+
+    wrapper.unmount()
   })
 })
