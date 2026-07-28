@@ -31,8 +31,8 @@ function loadSettings(): AppSettings {
     return {
       ...structuredClone(defaultSettings),
       ...parsed,
-      llm: { ...defaultSettings.llm, ...(parsed.llm || {}) },
-      session: { ...defaultSettings.session, ...(parsed.session || {}) },
+      llm: { ...defaultSettings.llm, ...parsed.llm },
+      session: { ...defaultSettings.session, ...parsed.session },
     }
   } catch {
     return structuredClone(defaultSettings)

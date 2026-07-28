@@ -8,6 +8,30 @@ export interface SkillMeta {
   content: string
 }
 
+export interface CategorySkillMeta extends SkillMeta {
+  /** File name relative to skills/<category>/ (e.g. "SKILL.md" or "custom-foo.md"). */
+  fileName: string
+  /** True for the built-in SKILL.md, which cannot be deleted. */
+  isDefault: boolean
+  /** True when currently selected (persisted in .selected.json). */
+  selected: boolean
+}
+
+const DEFAULT_SKILL_FILE = 'SKILL.md'
+const SELECTION_FILE = '.selected.json'
+const VALID_CATEGORY = ['function-point', 'test-case', 'control-chrome'] as const
+export type SkillCategory = (typeof VALID_CATEGORY)[number]
+
+const ALLOWED_FILE_RE = /^(?!.*[\\/])(?!\.)(?:[A-Za-z0-9_\- ]+\/)*[A-Za-z0-9_\- ]+\.md$/i
+
+function isCategory(value: string): value is SkillCategory {
+  return (VALID_CATEGORY as readonly string[]).includes(value)
+}
+
+function categoryDir(category: string): string {
+  return path.join(config.skillsDir, category)
+}
+
 function parseFrontmatter(raw: string): { name: string; description: string; body: string } {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
   if (!match) {
@@ -37,7 +61,7 @@ export async function loadSkills(): Promise<SkillMeta[]> {
   }
 
   for (const entry of entries) {
-    const skillPath = path.join(config.skillsDir, entry, 'SKILL.md')
+    const skillPath = path.join(config.skillsDir, entry, DEFAULT_SKILL_FILE)
     try {
       const raw = await fs.readFile(skillPath, 'utf8')
       const parsed = parseFrontmatter(raw)
@@ -98,4 +122,175 @@ export function buildSystemPrompt(skills: SkillMeta[], targetUrl?: string): stri
     '5. take_screenshot 记录关键证据',
     '6. 输出完整 Markdown 最终报告（最后一次回复只写报告，不要夹杂过程碎语）',
   ].join('\n')
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.access(targetPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function readSelectionFile(category: string): Promise<string[] | null> {
+  const file = path.join(categoryDir(category), SELECTION_FILE)
+  try {
+    const raw = await fs.readFile(file, 'utf8')
+    const parsed = JSON.parse(raw) as unknown
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
+      return parsed as string[]
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+async function writeSelectionFile(category: string, fileNames: string[]): Promise<void> {
+  const dir = categoryDir(category)
+  await fs.mkdir(dir, { recursive: true })
+  const file = path.join(dir, SELECTION_FILE)
+  await fs.writeFile(file, JSON.stringify(fileNames, null, 2), 'utf8')
+}
+
+/** Reads all `.md` files (excluding `.`-prefixed files) in skills/<category>/. */
+export async function loadCategorySkills(category: string): Promise<CategorySkillMeta[]> {
+  if (!isCategory(category)) return []
+  const dir = categoryDir(category)
+
+  let entries: string[] = []
+  try {
+    entries = await fs.readdir(dir)
+  } catch {
+    // directory does not exist yet; report nothing
+    return []
+  }
+
+  const mdFiles = entries.filter((entry) => entry.toLowerCase().endsWith('.md'))
+  const savedSelection = (await readSelectionFile(category)) ?? null
+
+  const skills: CategorySkillMeta[] = []
+  for (const fileName of mdFiles.sort()) {
+    const fullPath = path.join(dir, fileName)
+    try {
+      const raw = await fs.readFile(fullPath, 'utf8')
+      const parsed = parseFrontmatter(raw)
+      const isDefault = fileName === DEFAULT_SKILL_FILE
+      const selected = savedSelection
+        ? savedSelection.includes(fileName)
+        : isDefault
+      skills.push({
+        name: parsed.name || fileName.replace(/\.md$/i, ''),
+        description: parsed.description,
+        content: parsed.body,
+        fileName,
+        isDefault,
+        selected,
+      })
+    } catch {
+      // skip unreadable file
+    }
+  }
+
+  return skills
+}
+
+/** Returns only the selected skills; if none selected, falls back to the default SKILL.md. */
+export async function loadSelectedCategorySkills(
+  category: string,
+): Promise<CategorySkillMeta[]> {
+  const all = await loadCategorySkills(category)
+  const selected = all.filter((skill) => skill.selected)
+  if (selected.length > 0) return selected
+  const fallback = all.find((skill) => skill.isDefault)
+  return fallback ? [fallback] : []
+}
+
+/** Updates the persisted selection list. Validates that each fileName exists in the category dir. */
+export async function selectCategorySkills(
+  category: string,
+  fileNames: string[],
+): Promise<CategorySkillMeta[]> {
+  if (!isCategory(category)) {
+    throw new Error(`未知的 skill 类别：${category}`)
+  }
+  const all = await loadCategorySkills(category)
+  const known = new Set(all.map((skill) => skill.fileName))
+  const sanitized = Array.from(new Set(fileNames)).filter((name) => known.has(name))
+  await writeSelectionFile(category, sanitized)
+  return loadCategorySkills(category)
+}
+
+/** Saves a new custom skill file. Returns the file name actually written. */
+export async function saveSkill(
+  category: string,
+  fileName: string,
+  content: string,
+): Promise<{ fileName: string; fullPath: string }> {
+  if (!isCategory(category)) {
+    throw new Error(`未知的 skill 类别：${category}`)
+  }
+  const trimmed = (fileName || '').trim()
+  if (!trimmed) throw new Error('文件名不能为空')
+  if (!/\.md$/i.test(trimmed)) throw new Error('Skill 文件必须以 .md 结尾')
+  if (!ALLOWED_FILE_RE.test(trimmed)) throw new Error('文件名仅允许字母、数字、空格、下划线、连字符')
+  if (trimmed === DEFAULT_SKILL_FILE) {
+    throw new Error('不能覆盖默认 SKILL.md，请改用其他文件名')
+  }
+
+  const dir = categoryDir(category)
+  await fs.mkdir(dir, { recursive: true })
+  const fullPath = path.join(dir, trimmed)
+  if (await pathExists(fullPath)) {
+    throw new Error(`同名文件已存在：${trimmed}`)
+  }
+  await fs.writeFile(fullPath, content, 'utf8')
+  return { fileName: trimmed, fullPath }
+}
+
+/** Deletes a custom skill file. Default SKILL.md cannot be deleted. */
+export async function deleteSkill(category: string, fileName: string): Promise<void> {
+  if (!isCategory(category)) {
+    throw new Error(`未知的 skill 类别：${category}`)
+  }
+  const trimmed = (fileName || '').trim()
+  if (!trimmed) throw new Error('文件名不能为空')
+  if (trimmed === DEFAULT_SKILL_FILE) {
+    throw new Error('默认 SKILL.md 不能删除')
+  }
+  if (!ALLOWED_FILE_RE.test(trimmed)) throw new Error('文件名不合法')
+
+  const fullPath = path.join(categoryDir(category), trimmed)
+  // Resolve and ensure the resolved path stays inside the category directory.
+  const dir = categoryDir(category)
+  const resolved = path.resolve(fullPath)
+  if (!resolved.startsWith(path.resolve(dir) + path.sep)) {
+    throw new Error('文件路径越界')
+  }
+  await fs.unlink(fullPath)
+
+  // Clean up stale entries in .selected.json so persisted state stays tidy.
+  const savedSelection = await readSelectionFile(category)
+  if (savedSelection && savedSelection.includes(trimmed)) {
+    await writeSelectionFile(
+      category,
+      savedSelection.filter((name) => name !== trimmed),
+    )
+  }
+}
+
+/** Composes the system prompt for a category by concatenating selected skill bodies. */
+export function composeCategorySystemPrompt(skills: CategorySkillMeta[]): string {
+  return skills
+    .map((skill) => {
+      const header = `### Skill: ${skill.name}\n${skill.description ? `Description: ${skill.description}\n` : ''}`
+      return `${header}${skill.content}`
+    })
+    .join('\n\n')
+}
+
+/** Re-exports the static list so callers can validate input without importing types. */
+export function isSkillCategory(value: unknown): value is SkillCategory {
+  return typeof value === 'string' && isCategory(value)
 }

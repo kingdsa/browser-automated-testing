@@ -1,6 +1,11 @@
 import OpenAI from 'openai'
 import { z } from 'zod'
 import type { LlmSettings } from '../types/index.js'
+import {
+  composeCategorySystemPrompt,
+  loadSelectedCategorySkills,
+  type CategorySkillMeta,
+} from '../skills/loader.js'
 import { StreamingMindMapParser, type MindMapProgressSnapshot } from './streamMindMap.js'
 
 export interface MindMapNodeData {
@@ -30,6 +35,7 @@ export type RequirementStreamEvent =
   | { type: 'result'; data: RequirementAnalysisResult }
   | { type: 'error'; data: { message: string } }
   | { type: 'done'; data: Record<string, never> }
+  | { type: 'skills'; data: { skills: CategorySkillMeta[] } }
 
 const mindMapNodeSchema: z.ZodType<MindMapNode> = z.lazy(() =>
   z.object({
@@ -116,30 +122,15 @@ function clipRequirement(content: string): string {
   return content.length > 28000 ? `${content.slice(0, 28000)}\n\n...(内容过长，已截断)` : content
 }
 
-function buildReasoningPrompt(fileName: string, content: string): string {
-  return `请分析以下需求文档，输出一份供产品和测试人员阅读的简明分析过程。
+const JSON_OUTPUT_CONSTRAINT = `
 
-要求：
-1. 使用简洁 Markdown，按“需求目标、用户与主流程、功能模块、关键规则、异常与边界、待确认项”组织。
-2. 说明你如何从原文识别出可测试功能点，重点写判断依据和测试关注点。
-3. 不要输出 JSON，不要复述整份原文，不要使用空泛套话。
-4. 文档没有覆盖的内容要标记为“待确认”，不要自行编造。
+---
 
-文件名：${fileName || '未命名需求文档'}
+## 输出格式（强制约束，覆盖以上任何 Markdown / 思维导图格式要求）
 
-需求文档内容：
-${clipRequirement(content)}`
-}
+最终必须只输出一段合法 JSON（不要 markdown 代码块，不要任何额外解释文字）。
 
-function buildPrompt(fileName: string, content: string, reasoningSummary = ''): string {
-  const reasoningContext = reasoningSummary.trim()
-    ? `\n\n前置分析摘要（仅用于辅助结构化，不要原样输出）：\n${reasoningSummary.slice(0, 8000)}`
-    : ''
-  return `请分析以下需求文档，提取产品功能点，并输出思维导图 JSON。
-
-要求：
-1. 只输出合法 JSON，不要 markdown 代码块，不要额外解释。
-2. JSON 结构必须是：
+JSON 结构必须是：
 {
   "title": "文档/产品标题",
   "summary": "一句话摘要",
@@ -153,12 +144,25 @@ function buildPrompt(fileName: string, content: string, reasoningSummary = ''): 
     ]
   }
 }
-3. 根节点 text 用产品/模块总称；children 按“模块 -> 功能 -> 子功能/规则”分层。
-4. 每个功能点 text 简洁（<= 20 字），必要时用 note 补充验收点/业务规则。
-5. 优先提取可测试、可实现的功能点，忽略纯排版/目录噪音。
-6. 至少输出 5 个功能点；如果文档很短，也尽量结构化拆分。
 
-文件名：${fileName || '未命名需求文档'}
+约束：
+- 根节点 text 用产品/模块总称；children 按"模块 -> 功能 -> 子功能/规则"分层。
+- 每个功能点 text 简洁（<= 20 字），必要时用 note 补充验收点/业务规则。
+- 至少输出 5 个功能点；如果文档很短，也尽量结构化拆分。
+- 只关注黑盒行为，不假设数据库表、API 字段、代码结构。`
+
+function buildReasoningUserPrompt(fileName: string, content: string): string {
+  return `文件名：${fileName || '未命名需求文档'}
+
+需求文档内容：
+${clipRequirement(content)}`
+}
+
+function buildJsonUserPrompt(fileName: string, content: string, reasoningSummary = ''): string {
+  const reasoningContext = reasoningSummary.trim()
+    ? `\n\n前置分析摘要（仅用于辅助结构化，不要原样输出）：\n${reasoningSummary.slice(0, 8000)}`
+    : ''
+  return `文件名：${fileName || '未命名需求文档'}
 
 需求文档内容：
 ${clipRequirement(content)}${reasoningContext}`
@@ -295,49 +299,59 @@ export async function streamAnalyzeRequirementDocument(input: {
   assertLlmReady(llm, content)
   if (signal?.aborted) throw createAbortError()
 
+  const skills = await loadSelectedCategorySkills('function-point')
+  emit({ type: 'skills', data: { skills } })
+
+  const skillSystemPrompt = composeCategorySystemPrompt(skills)
+  const jsonSystemPrompt = skillSystemPrompt
+    ? `${skillSystemPrompt}${JSON_OUTPUT_CONSTRAINT}`
+    : JSON_OUTPUT_CONSTRAINT.trim()
+
   const client = createClient(llm)
   emit({ type: 'status', data: { message: 'AI 正在梳理需求目标、业务规则和测试边界...' } })
 
   try {
-    const reasoningStream = await client.chat.completions.create(
-      {
-        model: llm.model,
-        temperature: 0.2,
-        stream: true,
-        messages: [
+    const reasoningStream = skillSystemPrompt
+      ? await client.chat.completions.create(
           {
-            role: 'system',
-            content:
-              '你是资深产品经理与测试分析师。请输出准确、简洁、可供用户审查的需求分析摘要，不要输出 JSON。',
+            model: llm.model,
+            temperature: 0.2,
+            stream: true,
+            messages: [
+              { role: 'system', content: skillSystemPrompt },
+              { role: 'user', content: buildReasoningUserPrompt(fileName, content) },
+            ],
           },
-          {
-            role: 'user',
-            content: buildReasoningPrompt(fileName, content),
-          },
-        ],
-      },
-      { signal },
-    )
+          { signal },
+        )
+      : null
 
     let reasoningSummary = ''
-    for await (const chunk of reasoningStream) {
-      if (signal?.aborted) throw createAbortError()
-      const choiceDelta = chunk.choices?.[0]?.delta
-      if (!choiceDelta) continue
+    if (reasoningStream) {
+      for await (const chunk of reasoningStream) {
+        if (signal?.aborted) throw createAbortError()
+        const choiceDelta = chunk.choices?.[0]?.delta
+        if (!choiceDelta) continue
 
-      const nativeReasoning = extractCompatibleReasoning(choiceDelta)
-      if (nativeReasoning) {
-        emit({ type: 'reasoning', data: { content: nativeReasoning } })
+        const nativeReasoning = extractCompatibleReasoning(choiceDelta)
+        if (nativeReasoning) {
+          emit({ type: 'reasoning', data: { content: nativeReasoning } })
+        }
+
+        const contentDelta = choiceDelta.content
+        if (!contentDelta) continue
+        reasoningSummary += contentDelta
+        emit({ type: 'reasoning', data: { content: contentDelta } })
       }
 
-      const contentDelta = choiceDelta.content
-      if (!contentDelta) continue
-      reasoningSummary += contentDelta
-      emit({ type: 'reasoning', data: { content: contentDelta } })
+      if (signal?.aborted) throw createAbortError()
+      emit({ type: 'status', data: { message: '分析过程完成，正在生成思维导图 JSON...' } })
+    } else {
+      emit({
+        type: 'status',
+        data: { message: '未加载 function-point skill，直接生成 JSON...' },
+      })
     }
-
-    if (signal?.aborted) throw createAbortError()
-    emit({ type: 'status', data: { message: '分析过程完成，正在生成思维导图 JSON...' } })
 
     const jsonStream = await client.chat.completions.create(
       {
@@ -345,15 +359,8 @@ export async function streamAnalyzeRequirementDocument(input: {
         temperature: 0.2,
         stream: true,
         messages: [
-          {
-            role: 'system',
-            content:
-              '你是资深产品经理与测试分析师，擅长把需求文档拆解为可测试的功能点树。始终只输出合法 JSON。',
-          },
-          {
-            role: 'user',
-            content: buildPrompt(fileName, content, reasoningSummary),
-          },
+          { role: 'system', content: jsonSystemPrompt },
+          { role: 'user', content: buildJsonUserPrompt(fileName, content, reasoningSummary) },
         ],
       },
       { signal },

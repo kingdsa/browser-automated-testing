@@ -9,12 +9,14 @@ import {
 import {
   buildConcreteSteps,
   extractVerifiedPaths,
-  isVagueStep,
   normalizeCases as normalizeCasesGeneric,
-  normalizeStepList,
-  pickPathForFeature,
   type FeaturePoint as FeaturePointLite,
 } from './stepBuilder.js'
+import {
+  composeCategorySystemPrompt,
+  loadSelectedCategorySkills,
+  type CategorySkillMeta,
+} from '../skills/loader.js'
 
 export interface MindMapNodeData {
   text: string
@@ -78,6 +80,7 @@ export type TestCaseStreamEvent =
       }
     }
   | { type: 'result'; data: GenerateTestCasesResult }
+  | { type: 'skills'; data: { skills: CategorySkillMeta[] } }
   | { type: 'error'; data: { message: string } }
   | { type: 'done'; data: Record<string, never> }
 
@@ -218,32 +221,66 @@ function fallbackCases(title: string, features: FeaturePoint[], exploration?: Pa
   }
 }
 
-function buildStepStyleRules(hasExploration: boolean): string {
-  return `
-步骤写法硬性要求（最高优先级，必须遵守）：
-1. steps 必须是“可照着点页面”的原子操作序列，每一步只做一件事。
-2. 优先写成真实浏览器操作，例如：
-   - 选择左侧菜单「用户管理」
-   - 在用户列表中勾选一条用户记录
-   - 点击右上角「删除」按钮
-   - 在确认弹窗中点击「确定」
-   - 查看列表中该用户是否已消失，并确认成功提示
-3. 严禁空泛步骤。以下写法一律禁止：
-   - “进入 xxx 相关入口”
-   - “定位与 xxx 相关的入口/控件”
-   - “按照页面实际路径完成主流程”
-   - “执行与功能点相关的操作”
-   - “完成对应操作后检查结果”
-4. 每条主流程用例至少 4 步；异常/边界至少 3 步。建议覆盖：进入菜单/页面 → 选中对象或打开表单 → 执行关键操作 → 确认/提交 → 查看结果。
-5. 能写清位置就写清位置（左侧菜单、顶部 Tab、右上角按钮、列表行操作、弹窗底部按钮等）。
-6. 能写清可见文案就写清可见文案，统一用「」包裹按钮/菜单/字段名。
-7. 不要写 CSS selector、XPath、Playwright 代码；这是给人执行/审阅的业务步骤。
-8. expected 要可验证，例如“列表不再显示该用户，并出现删除成功提示”，不要只写“功能正常”。
-${hasExploration ? '9. 有探索笔记时：优先把“已验证路径”改写为用例 steps；按钮/菜单文案必须来自笔记，禁止编造。\n10. 若某功能点未找到入口：steps 写尝试定位的具体动作，note 标明“页面未找到对应入口”，不要虚构成功删除/提交。' : '9. 无页面探索时：仍要按常见后台/业务页面交互拆成精确步骤，不可用“相关入口”糊弄。'}
-`.trim()
+const JSON_OUTPUT_CONSTRAINT = `
+
+---
+
+## 输出格式（强制约束，覆盖以上任何文本/模板格式要求）
+
+最终必须只输出一段合法 JSON（不要 markdown 代码块，不要任何额外解释文字）。
+
+JSON 结构必须是：
+{
+  "title": "测试用例集标题",
+  "summary": "一句话说明覆盖范围",
+  "cases": [
+    {
+      "id": "TC-001",
+      "feature": "删除用户",
+      "featurePath": "用户管理 / 删除用户",
+      "title": "删除用户 - 正常流程",
+      "priority": "P0",
+      "type": "功能",
+      "preconditions": "已登录后台；用户列表中至少有 1 条可删除用户",
+      "steps": [
+        "选择左侧菜单「用户管理」",
+        "在用户列表中勾选一条目标用户",
+        "点击右上角「删除」按钮",
+        "在确认弹窗中点击「确定」",
+        "查看列表中该用户是否已删除，并确认成功提示"
+      ],
+      "expected": "目标用户从列表消失，页面出现删除成功提示，无报错",
+      "note": "步骤必须精确到菜单、对象、按钮与确认动作"
+    }
+  ]
 }
 
-function buildPrompt(input: {
+约束：
+- steps 必须是“可照着点页面”的原子操作序列，每一步只做一件事。
+- 可点击元素用「」标注，菜单层级用 -- 连接。
+- 严禁空泛步骤（如“相关入口”、“主流程”、“相应操作”）。
+- 每条主流程用例至少 4 步；异常/边界至少 3 步。
+- 不要写 CSS selector、XPath、Playwright 代码；这是给人执行/审阅的业务步骤。
+- expected 要可验证，不要只写“功能正常”。
+- priority 优先参考功能点 tags；没有则按业务重要性判断。
+- 总数建议控制在 __CASE_COUNT__ 条左右，不要滥造。
+- feature / featurePath 必须能对应到输入功能点。
+__GROUNDING_RULES__`
+
+function buildGroundingRules(exploration: PageExplorationResult | null): string {
+  return exploration
+    ? `
+- 用例 steps 必须基于探索笔记中真实出现的页面路径、按钮/链接文案、表单字段与反馈。
+- 禁止编造页面上不存在的入口、菜单、路由、按钮文案。
+- 功能点是覆盖范围：优先为探索到的相关路径写可执行步骤；若某功能点在页面未找到入口，steps 写“尝试定位/确认缺失”，并在 note 标明“页面未找到对应入口”，不要虚构成功路径。
+- expected 尽量对应探索中观察到的真实反馈文案/状态；未知时写可验证的业务结果。
+- preconditions 应反映真实前提（是否需登录、是否需特定数据、是否从某 URL 进入）。`
+    : `
+- 每个功能点至少 1 条主流程用例；关键功能补充 1 条异常/边界用例。
+- 用例要具体、可执行，避免空泛描述。`
+}
+
+function buildJsonUserPrompt(input: {
   title: string
   summary?: string
   features: FeaturePoint[]
@@ -276,63 +313,7 @@ ${exploration.toolSummaries.slice(-40).map((item) => `- ${item}`).join('\n') || 
 `
     : ''
 
-  const groundedRules = exploration
-    ? `
-页面落地规则（必须遵守）：
-1. 用例 steps 必须基于探索笔记中真实出现的页面路径、按钮/链接文案、表单字段与反馈。
-2. 禁止编造页面上不存在的入口、菜单、路由、按钮文案。
-3. 功能点是覆盖范围：优先为探索到的相关路径写可执行步骤；若某功能点在页面未找到入口，steps 写“尝试定位/确认缺失”，并在 note 标明“页面未找到对应入口”，不要虚构成功路径。
-4. expected 尽量对应探索中观察到的真实反馈文案/状态；未知时写可验证的业务结果。
-5. preconditions 应反映真实前提（是否需登录、是否需特定数据、是否从某 URL 进入）。
-`
-    : `
-生成规则：
-1. 每个功能点至少 1 条主流程用例；关键功能补充 1 条异常/边界用例。
-2. 用例要具体、可执行，避免空泛描述。
-3. priority 优先参考功能点 tags；没有则按业务重要性判断。
-4. 总数建议控制在 ${Math.min(Math.max(input.features.length, 8), 40)} 条左右，不要滥造。
-5. feature / featurePath 必须能对应到输入功能点。
-`
-
-  return `请根据以下功能点列表${exploration ? '与真实页面探索笔记' : ''}，生成可执行的软件测试用例，只输出合法 JSON，不要 markdown 代码块，不要额外解释。
-
-${buildStepStyleRules(Boolean(exploration))}
-
-JSON 结构必须是：
-{
-  "title": "测试用例集标题",
-  "summary": "一句话说明覆盖范围",
-  "cases": [
-    {
-      "id": "TC-001",
-      "feature": "删除用户",
-      "featurePath": "用户管理 / 删除用户",
-      "title": "删除用户 - 正常流程",
-      "priority": "P0",
-      "type": "功能",
-      "preconditions": "已登录后台；用户列表中至少有 1 条可删除用户",
-      "steps": [
-        "选择左侧菜单「用户管理」",
-        "在用户列表中勾选一条目标用户",
-        "点击右上角「删除」按钮",
-        "在确认弹窗中点击「确定」",
-        "查看列表中该用户是否已删除，并确认成功提示"
-      ],
-      "expected": "目标用户从列表消失，页面出现删除成功提示，无报错",
-      "note": "步骤必须精确到菜单、对象、按钮与确认动作"
-    }
-  ]
-}
-
-${groundedRules}
-通用规则：
-1. 每个功能点至少 1 条主流程用例；关键功能可补充异常/边界用例。
-2. priority 优先参考功能点 tags；没有则按业务重要性判断。
-3. 总数建议控制在 ${Math.min(Math.max(input.features.length, 8), 40)} 条左右，不要滥造。
-4. feature / featurePath 必须能对应到输入功能点。
-5. 再次强调：steps 禁止出现“相关入口/主流程/相应操作”等模糊词。
-
-需求标题：${input.title || '未命名需求'}
+  return `需求标题：${input.title || '未命名需求'}
 需求摘要：${input.summary || '无'}
 ${explorationBlock}
 功能点列表 JSON：
@@ -421,6 +402,28 @@ function parseTestCaseResult(
   }
 }
 
+async function composeTestCaseSystemPrompt(
+  features: FeaturePoint[],
+  exploration: PageExplorationResult | null,
+): Promise<{ systemPrompt: string; skills: CategorySkillMeta[] }> {
+  const testCaseSkills = await loadSelectedCategorySkills('test-case')
+  const skills: CategorySkillMeta[] = [...testCaseSkills]
+
+  if (exploration) {
+    const controlChromeSkills = await loadSelectedCategorySkills('control-chrome')
+    skills.push(...controlChromeSkills)
+  }
+
+  const skillBody = composeCategorySystemPrompt(skills)
+  const caseCount = features.length
+  const groundingRules = buildGroundingRules(exploration)
+  const constraint = JSON_OUTPUT_CONSTRAINT.replace(/__CASE_COUNT__/g, String(Math.min(Math.max(8, caseCount), 40)))
+    .replace(/__GROUNDING_RULES__/g, groundingRules)
+
+  const systemPrompt = skillBody ? `${skillBody}${constraint}` : constraint.trim()
+  return { systemPrompt, skills }
+}
+
 export async function generateTestCasesFromFeatures(input: {
   llm: LlmSettings
   title?: string
@@ -494,7 +497,6 @@ export async function streamGenerateTestCasesFromFeatures(input: {
           message: `页面探索完成（${exploration.stepCount} 步，访问 ${exploration.visitedUrls.length || 1} 个 URL），开始基于页面事实生成测试用例…`,
         },
       })
-      // Separate exploration text from the upcoming JSON stream in the UI.
       emit({
         type: 'delta',
         data: {
@@ -504,7 +506,6 @@ export async function streamGenerateTestCasesFromFeatures(input: {
     } catch (error) {
       if (isAbortError(error, signal)) throw createAbortError()
       const reason = error instanceof Error ? error.message : String(error)
-      // Exploration failure should not hard-block pure feature generation.
       emit({
         type: 'status',
         data: { message: `页面探索失败，将回退为仅基于功能点生成：${reason}` },
@@ -515,6 +516,9 @@ export async function streamGenerateTestCasesFromFeatures(input: {
     emit({ type: 'status', data: { message: `未指定目标页面，正在根据 ${features.length} 个功能点生成测试用例...` } })
   }
 
+  const { systemPrompt, skills } = await composeTestCaseSystemPrompt(features, exploration)
+  emit({ type: 'skills', data: { skills } })
+
   try {
     const stream = await client.chat.completions.create(
       {
@@ -522,16 +526,8 @@ export async function streamGenerateTestCasesFromFeatures(input: {
         temperature: 0.2,
         stream: true,
         messages: [
-          {
-            role: 'system',
-            content: exploration
-              ? '你是资深测试架构师。你必须严格依据真实页面探索笔记与功能点生成可执行测试用例。steps 必须是精确到菜单/按钮/弹窗确认的原子浏览器操作，禁止“相关入口”“主流程”等空泛描述。始终只输出合法 JSON。'
-              : '你是资深测试架构师，擅长把功能点拆解为可执行、可回归的测试用例。steps 必须写成测试人员能直接照着点的精确操作（选择菜单、选中记录、点击按钮、确认弹窗、查看结果），禁止“相关入口”等模糊写法。始终只输出合法 JSON。',
-          },
-          {
-            role: 'user',
-            content: buildPrompt({ title, summary, features, exploration }),
-          },
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: buildJsonUserPrompt({ title, summary, features, exploration }) },
         ],
       },
       { signal },
@@ -557,7 +553,6 @@ export async function streamGenerateTestCasesFromFeatures(input: {
     if (isAbortError(error, signal)) {
       throw createAbortError()
     }
-    // Keep product usable even when model output is unstable.
     const fallback = fallbackCases(title, features, exploration)
     const reason = error instanceof Error ? error.message : String(error)
     const result = {

@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import AppNav from '@/components/requirements/AppNav.vue'
 import FeatureMindMap from '@/components/requirements/FeatureMindMap.vue'
 import GenerationStreamPanel from '@/components/requirements/GenerationStreamPanel.vue'
+import SkillsPanel from '@/components/requirements/SkillsPanel.vue'
 import TestCasePanel from '@/components/requirements/TestCasePanel.vue'
 import {
   extractRequirementFile,
@@ -466,6 +467,16 @@ async function runAnalyze() {
             const message = String(payload.message || '')
             generationStatus.value = message
             statusText.value = message
+          } else if (type === 'skills') {
+            const loaded = Array.isArray(payload.skills)
+              ? (payload.skills as Array<{ name?: string; fileName?: string }>)
+                  .map((item) => item.name || item.fileName || '')
+                  .filter(Boolean)
+              : []
+            if (loaded.length) {
+              generationStatus.value = `已加载 skills：${loaded.join('、')}`
+              statusText.value = generationStatus.value
+            }
           } else if (type === 'reasoning') {
             appendAssistantDelta(String(payload.content || ''), 'reasoning')
             generationStatus.value = 'AI 正在分析需求...'
@@ -590,6 +601,16 @@ async function runGenerateTestCases() {
             const message = String(payload.message || '')
             generationStatus.value = message
             statusText.value = message
+          } else if (type === 'skills') {
+            const loaded = Array.isArray(payload.skills)
+              ? (payload.skills as Array<{ name?: string; fileName?: string }>)
+                  .map((item) => item.name || item.fileName || '')
+                  .filter(Boolean)
+              : []
+            if (loaded.length) {
+              generationStatus.value = `已加载 skills：${loaded.join('、')}`
+              statusText.value = generationStatus.value
+            }
           } else if (type === 'tool_start') {
             const name = String(payload.name || 'tool')
             const message = `浏览器操作：${name}`
@@ -918,6 +939,11 @@ async function onTestCaseJsonFileChange(event: Event) {
               <input v-model="settings.settings.llm.apiKey" type="password" placeholder="sk-..." />
             </label>
           </div>
+          <SkillsPanel
+            category="function-point"
+            title="功能点 Skills（可多选拼接）"
+            :disabled="analyzing || generatingCases"
+          />
           <button
             type="button"
             class="primary"
@@ -991,6 +1017,11 @@ async function onTestCaseJsonFileChange(event: Event) {
             </p>
           </div>
 
+          <SkillsPanel
+            category="test-case"
+            title="测试用例 Skills（可多选拼接；启用页面探索时自动叠加 control-chrome skill）"
+            :disabled="analyzing || generatingCases"
+          />
           <button
             type="button"
             class="secondary"

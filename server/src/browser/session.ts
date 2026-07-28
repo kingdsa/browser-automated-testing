@@ -762,7 +762,7 @@ export class BrowserSession {
   async evaluate(script: string): Promise<ToolResult> {
     const page = await this.ensurePage()
     const result = await page.evaluate((code) => {
-      // eslint-disable-next-line no-new-func
+       
       const fn = new Function(code)
       return fn()
     }, script)
