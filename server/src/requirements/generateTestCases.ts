@@ -6,6 +6,15 @@ import {
   shouldExploreWithBrowser,
   type PageExplorationResult,
 } from './exploreForTestCases.js'
+import {
+  buildConcreteSteps,
+  extractVerifiedPaths,
+  isVagueStep,
+  normalizeCases as normalizeCasesGeneric,
+  normalizeStepList,
+  pickPathForFeature,
+  type FeaturePoint as FeaturePointLite,
+} from './stepBuilder.js'
 
 export interface MindMapNodeData {
   text: string
@@ -131,33 +140,43 @@ function makeCaseId(index: number): string {
 function normalizeCases(
   cases: Array<z.infer<typeof testCaseSchema>>,
   features: FeaturePoint[],
+  exploration?: PageExplorationResult | null,
 ): TestCase[] {
-  const featureByText = new Map(features.map((item) => [item.text, item]))
-  return cases.map((item, index) => {
-    const matched = featureByText.get(item.feature)
-    const featurePath = item.featurePath?.trim() || matched?.path || item.feature
-    const steps = item.steps.map((step) => String(step).trim()).filter(Boolean)
+  const lite = normalizeCasesGeneric(
+    cases.map((item) => ({ ...item, priority: item.priority })),
+    features as FeaturePointLite[],
+    exploration
+      ? {
+          notes: exploration.notes,
+          targetUrl: exploration.targetUrl,
+          visitedUrls: exploration.visitedUrls,
+        }
+      : null,
+  )
+  return lite.map((item, index) => {
+    const matched = features.find((feature) => feature.text === item.feature)
+    const featurePath = item.featurePath || matched?.path || item.feature
     return {
-      id: item.id?.trim() || makeCaseId(index),
-      feature: item.feature.trim(),
+      id: item.id || makeCaseId(index),
+      feature: item.feature,
       featurePath,
-      title: item.title.trim().slice(0, 120),
-      priority: item.priority || 'P1',
-      type: (item.type || '功能').trim().slice(0, 20) || '功能',
-      preconditions: (item.preconditions || '').trim().slice(0, 500),
-      steps: steps.length ? steps.slice(0, 20).map((step) => step.slice(0, 300)) : ['执行与功能点相关的操作'],
-      expected: item.expected.trim().slice(0, 500),
-      ...(item.note?.trim() ? { note: item.note.trim().slice(0, 500) } : {}),
+      title: item.title,
+      priority: (item.priority as TestCasePriority) || 'P1',
+      type: item.type || '功能',
+      preconditions: item.preconditions || '',
+      steps: item.steps,
+      expected: item.expected,
+      ...(item.note ? { note: item.note } : {}),
     }
   })
 }
 
 function fallbackCases(title: string, features: FeaturePoint[], exploration?: PageExplorationResult | null): GenerateTestCasesResult {
+  const pageHint = exploration?.targetUrl || exploration?.visitedUrls?.[0]
   const cases: TestCase[] = features.flatMap((feature, index) => {
     const baseId = makeCaseId(index * 2)
     const baseIdAlt = makeCaseId(index * 2 + 1)
     const priority = (feature.tags || []).find((tag) => /^P[0-3]$/i.test(tag))?.toUpperCase() as TestCasePriority | undefined
-    const pageHint = exploration?.targetUrl || exploration?.visitedUrls?.[0]
     const main: TestCase = {
       id: baseId,
       feature: feature.text,
@@ -166,18 +185,7 @@ function fallbackCases(title: string, features: FeaturePoint[], exploration?: Pa
       priority: priority || 'P1',
       type: '功能',
       preconditions: feature.note || (pageHint ? `系统可用；可访问 ${pageHint}` : '系统可用，用户已具备相应权限'),
-      steps: pageHint
-        ? [
-            `打开目标页面 ${pageHint}`,
-            `在页面中定位与「${feature.text}」相关的入口/控件`,
-            `按照页面实际路径完成「${feature.text}」主流程`,
-            '检查页面反馈与数据结果',
-          ]
-        : [
-            `进入与「${feature.text}」相关的页面/入口`,
-            `按照需求完成「${feature.text}」的主流程操作`,
-            '检查页面反馈与数据结果',
-          ],
+      steps: buildConcreteSteps(feature, { pageHint, exploration, kind: 'main' }),
       expected: `「${feature.text}」按预期完成，界面反馈正确，数据一致`,
       ...(feature.note ? { note: feature.note } : {}),
     }
@@ -189,11 +197,7 @@ function fallbackCases(title: string, features: FeaturePoint[], exploration?: Pa
       priority: priority || 'P2',
       type: '异常',
       preconditions: feature.note || '系统可用',
-      steps: [
-        `进入「${feature.text}」相关入口`,
-        '输入非法/缺失/边界数据，或执行异常操作',
-        '观察错误提示与系统状态',
-      ],
+      steps: buildConcreteSteps(feature, { pageHint, exploration, kind: 'negative' }),
       expected: '系统给出明确错误提示，不产生脏数据，不崩溃',
     }
     return [main, negative]
@@ -214,6 +218,31 @@ function fallbackCases(title: string, features: FeaturePoint[], exploration?: Pa
   }
 }
 
+function buildStepStyleRules(hasExploration: boolean): string {
+  return `
+步骤写法硬性要求（最高优先级，必须遵守）：
+1. steps 必须是“可照着点页面”的原子操作序列，每一步只做一件事。
+2. 优先写成真实浏览器操作，例如：
+   - 选择左侧菜单「用户管理」
+   - 在用户列表中勾选一条用户记录
+   - 点击右上角「删除」按钮
+   - 在确认弹窗中点击「确定」
+   - 查看列表中该用户是否已消失，并确认成功提示
+3. 严禁空泛步骤。以下写法一律禁止：
+   - “进入 xxx 相关入口”
+   - “定位与 xxx 相关的入口/控件”
+   - “按照页面实际路径完成主流程”
+   - “执行与功能点相关的操作”
+   - “完成对应操作后检查结果”
+4. 每条主流程用例至少 4 步；异常/边界至少 3 步。建议覆盖：进入菜单/页面 → 选中对象或打开表单 → 执行关键操作 → 确认/提交 → 查看结果。
+5. 能写清位置就写清位置（左侧菜单、顶部 Tab、右上角按钮、列表行操作、弹窗底部按钮等）。
+6. 能写清可见文案就写清可见文案，统一用「」包裹按钮/菜单/字段名。
+7. 不要写 CSS selector、XPath、Playwright 代码；这是给人执行/审阅的业务步骤。
+8. expected 要可验证，例如“列表不再显示该用户，并出现删除成功提示”，不要只写“功能正常”。
+${hasExploration ? '9. 有探索笔记时：优先把“已验证路径”改写为用例 steps；按钮/菜单文案必须来自笔记，禁止编造。\n10. 若某功能点未找到入口：steps 写尝试定位的具体动作，note 标明“页面未找到对应入口”，不要虚构成功删除/提交。' : '9. 无页面探索时：仍要按常见后台/业务页面交互拆成精确步骤，不可用“相关入口”糊弄。'}
+`.trim()
+}
+
 function buildPrompt(input: {
   title: string
   summary?: string
@@ -222,6 +251,15 @@ function buildPrompt(input: {
 }): string {
   const featureJson = JSON.stringify(input.features.slice(0, 80), null, 2)
   const exploration = input.exploration
+  const verifiedPaths = extractVerifiedPaths(exploration?.notes)
+  const verifiedPathBlock = verifiedPaths.length
+    ? `已从探索笔记提取的可执行路径（生成 steps 时优先复用/微调）：
+${verifiedPaths
+  .slice(0, 8)
+  .map((path, index) => `路径${index + 1}:\n${path.map((step, stepIndex) => `  ${stepIndex + 1}. ${step}`).join('\n')}`)
+  .join('\n')}`
+    : ''
+
   const explorationBlock = exploration
     ? `
 【真实页面探索笔记】（最高优先级事实来源）
@@ -230,6 +268,8 @@ function buildPrompt(input: {
 探索步数：${exploration.stepCount}
 
 ${exploration.notes.slice(0, 12000)}
+
+${verifiedPathBlock}
 
 工具观察摘要（节选）：
 ${exploration.toolSummaries.slice(-40).map((item) => `- ${item}`).join('\n') || '- 无'}
@@ -242,21 +282,21 @@ ${exploration.toolSummaries.slice(-40).map((item) => `- ${item}`).join('\n') || 
 1. 用例 steps 必须基于探索笔记中真实出现的页面路径、按钮/链接文案、表单字段与反馈。
 2. 禁止编造页面上不存在的入口、菜单、路由、按钮文案。
 3. 功能点是覆盖范围：优先为探索到的相关路径写可执行步骤；若某功能点在页面未找到入口，steps 写“尝试定位/确认缺失”，并在 note 标明“页面未找到对应入口”，不要虚构成功路径。
-4. steps 使用给人看的业务操作描述（如：点击「提交」、在「手机号」输入框填写无效号码），不要写 CSS selector / Playwright 选择器。
-5. expected 尽量对应探索中观察到的真实反馈文案/状态；未知时写可验证的业务结果。
-6. preconditions 应反映真实前提（是否需登录、是否需特定数据、是否从某 URL 进入）。
+4. expected 尽量对应探索中观察到的真实反馈文案/状态；未知时写可验证的业务结果。
+5. preconditions 应反映真实前提（是否需登录、是否需特定数据、是否从某 URL 进入）。
 `
     : `
 生成规则：
 1. 每个功能点至少 1 条主流程用例；关键功能补充 1 条异常/边界用例。
 2. 用例要具体、可执行，避免空泛描述。
-3. steps 用有序操作步骤，expected 写可验证结果。
-4. priority 优先参考功能点 tags；没有则按业务重要性判断。
-5. 总数建议控制在 ${Math.min(Math.max(input.features.length, 8), 40)} 条左右，不要滥造。
-6. feature / featurePath 必须能对应到输入功能点。
+3. priority 优先参考功能点 tags；没有则按业务重要性判断。
+4. 总数建议控制在 ${Math.min(Math.max(input.features.length, 8), 40)} 条左右，不要滥造。
+5. feature / featurePath 必须能对应到输入功能点。
 `
 
   return `请根据以下功能点列表${exploration ? '与真实页面探索笔记' : ''}，生成可执行的软件测试用例，只输出合法 JSON，不要 markdown 代码块，不要额外解释。
+
+${buildStepStyleRules(Boolean(exploration))}
 
 JSON 结构必须是：
 {
@@ -265,15 +305,21 @@ JSON 结构必须是：
   "cases": [
     {
       "id": "TC-001",
-      "feature": "功能点名称",
-      "featurePath": "模块 / 功能点",
-      "title": "用例标题",
-      "priority": "P0|P1|P2|P3",
-      "type": "功能|异常|边界|权限|兼容",
-      "preconditions": "前置条件",
-      "steps": ["步骤1", "步骤2"],
-      "expected": "期望结果",
-      "note": "可选备注"
+      "feature": "删除用户",
+      "featurePath": "用户管理 / 删除用户",
+      "title": "删除用户 - 正常流程",
+      "priority": "P0",
+      "type": "功能",
+      "preconditions": "已登录后台；用户列表中至少有 1 条可删除用户",
+      "steps": [
+        "选择左侧菜单「用户管理」",
+        "在用户列表中勾选一条目标用户",
+        "点击右上角「删除」按钮",
+        "在确认弹窗中点击「确定」",
+        "查看列表中该用户是否已删除，并确认成功提示"
+      ],
+      "expected": "目标用户从列表消失，页面出现删除成功提示，无报错",
+      "note": "步骤必须精确到菜单、对象、按钮与确认动作"
     }
   ]
 }
@@ -284,6 +330,7 @@ ${groundedRules}
 2. priority 优先参考功能点 tags；没有则按业务重要性判断。
 3. 总数建议控制在 ${Math.min(Math.max(input.features.length, 8), 40)} 条左右，不要滥造。
 4. feature / featurePath 必须能对应到输入功能点。
+5. 再次强调：steps 禁止出现“相关入口/主流程/相应操作”等模糊词。
 
 需求标题：${input.title || '未命名需求'}
 需求摘要：${input.summary || '无'}
@@ -353,7 +400,7 @@ function parseTestCaseResult(
   const validated = responseSchema.safeParse(parsed)
   if (!validated.success) throw new Error('模型返回结构不完整')
 
-  const cases = normalizeCases(validated.data.cases, features)
+  const cases = normalizeCases(validated.data.cases, features, exploration)
   const grounded = Boolean(exploration)
   return {
     title: validated.data.title.trim() || `${title}测试用例`,
@@ -478,8 +525,8 @@ export async function streamGenerateTestCasesFromFeatures(input: {
           {
             role: 'system',
             content: exploration
-              ? '你是资深测试架构师。你必须严格依据真实页面探索笔记与功能点生成可执行测试用例，禁止脱离页面事实发散。始终只输出合法 JSON。'
-              : '你是资深测试架构师，擅长把功能点拆解为可执行、可回归的测试用例。始终只输出合法 JSON。',
+              ? '你是资深测试架构师。你必须严格依据真实页面探索笔记与功能点生成可执行测试用例。steps 必须是精确到菜单/按钮/弹窗确认的原子浏览器操作，禁止“相关入口”“主流程”等空泛描述。始终只输出合法 JSON。'
+              : '你是资深测试架构师，擅长把功能点拆解为可执行、可回归的测试用例。steps 必须写成测试人员能直接照着点的精确操作（选择菜单、选中记录、点击按钮、确认弹窗、查看结果），禁止“相关入口”等模糊写法。始终只输出合法 JSON。',
           },
           {
             role: 'user',
