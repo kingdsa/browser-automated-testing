@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { nextTick, reactive, ref, watch } from 'vue'
+import { onBeforeUpdate, onUpdated, reactive, ref } from 'vue'
 import type { GenerationMessage } from '@/types/requirements'
 import { renderMarkdown } from '@/utils/markdown'
 
-const props = defineProps<{
+defineProps<{
   title: string
   subtitle?: string
   messages: GenerationMessage[]
@@ -58,50 +58,30 @@ function scrollToBottom(force = false) {
   el.scrollTop = el.scrollHeight
 }
 
-function onStreamBodyScroll(event: Event) {
-  const body = event.target
-  if (!(body instanceof HTMLElement)) return
-  // If the user reads earlier output, leave this message in place until they return to the bottom.
-  if (!isNearBottom(body)) {
-    body.dataset.pinned = '0'
-    return
-  }
-  body.dataset.pinned = '1'
-}
+const savedScrollStates = new Map<HTMLElement, { top: number; nearBottom: boolean }>()
 
-function scrollStreamBodiesIfNeeded(force = false) {
+onBeforeUpdate(() => {
+  savedScrollStates.clear()
   for (const body of streamBodyRefs.values()) {
-    const pinned = body.dataset.pinned !== '0'
-    if (force || (pinned && pinnedToBottom.value)) {
+    savedScrollStates.set(body, { top: body.scrollTop, nearBottom: isNearBottom(body) })
+  }
+})
+
+onUpdated(() => {
+  for (const body of streamBodyRefs.values()) {
+    const saved = savedScrollStates.get(body)
+    if (!saved) {
       body.scrollTop = body.scrollHeight
-      body.dataset.pinned = '1'
+      continue
+    }
+    if (saved.nearBottom) {
+      body.scrollTop = body.scrollHeight
+    } else {
+      const max = body.scrollHeight - body.clientHeight
+      body.scrollTop = Math.max(0, Math.min(saved.top, max))
     }
   }
-}
-
-watch(
-  () => props.messages.map((m) => m.id).join('|'),
-  async () => {
-    await nextTick()
-    if (!pinnedToBottom.value) return
-    scrollToBottom()
-    scrollStreamBodiesIfNeeded(false)
-  },
-)
-
-watch(
-  () =>
-    props.messages.map((m) => `${m.id}:${m.content.length}:${m.streaming ? 1 : 0}`).join('|') +
-    `:${props.statusText || ''}:${props.errorText || ''}`,
-  async () => {
-    if (!pinnedToBottom.value) return
-    await nextTick()
-    requestAnimationFrame(() => {
-      scrollToBottom()
-      scrollStreamBodiesIfNeeded(false)
-    })
-  },
-)
+})
 
 function roleLabel(message: GenerationMessage) {
   if (message.role === 'user') return '你'
@@ -129,9 +109,10 @@ function formatMarkdown(message: GenerationMessage) {
 
 function jumpToLatest() {
   pinnedToBottom.value = true
-  for (const body of streamBodyRefs.values()) body.dataset.pinned = '1'
   scrollToBottom(true)
-  scrollStreamBodiesIfNeeded(true)
+  for (const body of streamBodyRefs.values()) {
+    body.scrollTop = body.scrollHeight
+  }
 }
 </script>
 
@@ -181,7 +162,6 @@ function jumpToLatest() {
           "
           class="raw-output"
           :ref="(el) => setStreamBody(message.id, el as Element | null)"
-          @scroll.passive="onStreamBodyScroll"
           >{{ assistantText(message) }}</pre>
 
         <div
@@ -189,7 +169,6 @@ function jumpToLatest() {
           class="content markdown-body"
           :ref="(el) => setStreamBody(message.id, el as Element | null)"
           v-html="formatMarkdown(message)"
-          @scroll.passive="onStreamBodyScroll"
         />
       </article>
     </div>
@@ -436,14 +415,13 @@ function jumpToLatest() {
 }
 
 .content :deep(pre) {
-  max-height: 48vh;
-  overflow: auto;
   margin: 0;
   padding: 12px;
   border-radius: var(--radius-md);
   background: var(--code-bg);
   color: var(--code-text);
-  overscroll-behavior: contain;
+  white-space: pre-wrap;
+  overflow: visible;
 }
 
 .content :deep(code) {
