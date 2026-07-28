@@ -82,11 +82,10 @@ function scrollStreamBodiesIfNeeded(force = false) {
 watch(
   () => props.messages.map((m) => m.id).join('|'),
   async () => {
-    pinnedToBottom.value = true
     await nextTick()
-    for (const body of streamBodyRefs.values()) body.dataset.pinned = '1'
-    scrollToBottom(true)
-    scrollStreamBodiesIfNeeded(true)
+    if (!pinnedToBottom.value) return
+    scrollToBottom()
+    scrollStreamBodiesIfNeeded(false)
   },
 )
 

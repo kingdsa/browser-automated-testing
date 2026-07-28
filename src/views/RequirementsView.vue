@@ -103,7 +103,10 @@ const canGenerateCases = computed(() => {
 
 const featureList = computed(() => flattenFeatures(mindMapData.value))
 const showTextGenerationPanel = computed(
-  () => showGenerationPanel.value && !progressiveMapVisible.value,
+  () =>
+    showGenerationPanel.value &&
+    !progressiveMapVisible.value &&
+    (generationKind.value === 'analyze' || mainTab.value === 'cases'),
 )
 
 onMounted(async () => {
@@ -639,7 +642,6 @@ async function runGenerateTestCases() {
             testCases.value = result.cases
             testCaseTitle.value = result.title
             testCaseSummary.value = result.summary
-            mainTab.value = 'cases'
             const grounded =
               (result as GenerateTestCasesResult & { groundedInPage?: boolean }).groundedInPage
                 ? '（已基于真实页面探索）'

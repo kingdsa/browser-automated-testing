@@ -102,19 +102,49 @@ defineExpose({ refresh })
       <div class="skills-panel__actions">
         <button
           type="button"
-          class="ghost mini"
+          class="icon-btn"
           :disabled="loading || uploading || disabled"
+          :title="loading ? '刷新中…' : '刷新'"
+          :aria-label="loading ? '刷新中' : '刷新'"
           @click="refresh"
         >
-          {{ loading ? '刷新中…' : '刷新' }}
+          <svg
+            class="icon-btn__svg"
+            :class="{ spinning: loading }"
+            viewBox="0 0 24 24"
+            width="14"
+            height="14"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path
+              fill="currentColor"
+              d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.74 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
+            />
+          </svg>
         </button>
         <button
           type="button"
-          class="ghost mini"
+          class="icon-btn"
           :disabled="uploading || disabled"
+          :title="uploading ? '上传中…' : '上传 .md'"
+          :aria-label="uploading ? '上传中' : '上传 .md'"
           @click="onPickFile"
         >
-          {{ uploading ? '上传中…' : '上传 .md' }}
+          <svg
+            class="icon-btn__svg"
+            :class="{ pulsing: uploading }"
+            viewBox="0 0 24 24"
+            width="14"
+            height="14"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path
+              fill="currentColor"
+              d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"
+            />
+          </svg>
         </button>
         <input
           ref="fileInputRef"
@@ -199,9 +229,62 @@ defineExpose({ refresh })
   gap: 6px;
 }
 
-.skills-panel__actions .mini {
-  padding: 4px 8px;
-  font-size: 11px;
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  line-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--panel-soft) 85%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.icon-btn:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--surface-hover);
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.icon-btn__svg {
+  display: block;
+}
+
+.icon-btn__svg.spinning {
+  animation: skills-spin 0.9s linear infinite;
+}
+
+.icon-btn__svg.pulsing {
+  animation: skills-pulse 1s ease-in-out infinite;
+}
+
+@keyframes skills-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes skills-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 
 .skills-panel__error {
