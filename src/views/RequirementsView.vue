@@ -52,6 +52,14 @@ const activeTab = ref<'upload' | 'text'>('upload')
 const mainTab = ref<'map' | 'cases'>('map')
 const readonlyMap = ref(false)
 
+/** 功能点「是否 AI 测试」勾选面板可见性 */
+const showAiTestPanel = ref(false)
+/** 导出功能点时弹出选择：全部 / 仅 AI 测试 */
+const showExportModal = ref(false)
+const exportMode = ref<'all' | 'ai-only'>('all')
+/** 用于在思维导图节点上做视觉标记的标签文案 */
+const AI_TEST_TAG = 'AI测试'
+
 const testCaseTitle = ref('')
 const testCaseSummary = ref('')
 const testCases = ref<TestCase[]>([])
@@ -136,7 +144,7 @@ onBeforeUnmount(() => {
 function flattenFeatures(
   node: MindMapNode | null,
   path: string[] = [],
-  acc: Array<{ path: string; text: string; note?: string; tags?: string[] }> = [],
+  acc: Array<{ path: string; text: string; note?: string; tags?: string[]; aiTest?: boolean }> = [],
 ) {
   if (!node) return acc
   const nextPath = [...path, node.data.text]
@@ -146,12 +154,93 @@ function flattenFeatures(
       text: node.data.text,
       note: node.data.note,
       tags: node.data.tag,
+      aiTest: node.data.aiTest,
     })
   }
   for (const child of node.children || []) {
     flattenFeatures(child, nextPath, acc)
   }
   return acc
+}
+
+/** 勾选/取消勾选某个功能点的「是否 AI 测试」标记，并在思维导图节点上同步视觉标签 */
+function toggleFeatureAiTest(path: string, value: boolean) {
+  if (!mindMapData.value) return
+  const segments = path.split(' / ')
+  const root = JSON.parse(JSON.stringify(mindMapData.value)) as MindMapNode
+
+  const apply = (node: MindMapNode, depth: number): boolean => {
+    if (depth < segments.length && node.data.text !== segments[depth]) return false
+    if (depth === segments.length - 1) {
+      node.data.aiTest = value
+      const tags = node.data.tag ? [...node.data.tag] : []
+      const hasTag = tags.includes(AI_TEST_TAG)
+      if (value && !hasTag) tags.push(AI_TEST_TAG)
+      else if (!value && hasTag) {
+        const idx = tags.indexOf(AI_TEST_TAG)
+        if (idx >= 0) tags.splice(idx, 1)
+      }
+      node.data.tag = tags.length ? tags : undefined
+      return true
+    }
+    for (const child of node.children || []) {
+      if (apply(child, depth + 1)) return true
+    }
+    return false
+  }
+
+  apply(root, 0)
+  mindMapData.value = root
+}
+
+/** 一键全选 / 全不选「是否 AI 测试」 */
+function setAllAiTest(value: boolean) {
+  if (!mindMapData.value) return
+  const root = JSON.parse(JSON.stringify(mindMapData.value)) as MindMapNode
+  const walk = (node: MindMapNode, isRoot: boolean) => {
+    if (!isRoot) {
+      node.data.aiTest = value
+      const tags = node.data.tag ? [...node.data.tag] : []
+      const hasTag = tags.includes(AI_TEST_TAG)
+      if (value && !hasTag) tags.push(AI_TEST_TAG)
+      else if (!value && hasTag) {
+        const idx = tags.indexOf(AI_TEST_TAG)
+        if (idx >= 0) tags.splice(idx, 1)
+      }
+      node.data.tag = tags.length ? tags : undefined
+    }
+    for (const child of node.children || []) walk(child, false)
+  }
+  walk(root, true)
+  mindMapData.value = root
+}
+
+const aiTestCount = computed(
+  () => featureList.value.filter((item) => item.aiTest).length,
+)
+
+/** 复制思维导图并按需过滤掉未勾选 AI 测试的叶子功能点 */
+function filterMindMapForExport(root: MindMapNode, aiOnly: boolean): MindMapNode {
+  if (!aiOnly) return root
+  const clone = JSON.parse(JSON.stringify(root)) as MindMapNode
+  const prune = (node: MindMapNode): MindMapNode | null => {
+    const isLeaf = !node.children || node.children.length === 0
+    if (isLeaf) {
+      return node.data.aiTest ? node : null
+    }
+    const kept: MindMapNode[] = []
+    for (const child of node.children!) {
+      const result = prune(child)
+      if (result) kept.push(result)
+    }
+    if (kept.length === 0) {
+      // 子节点全部被过滤，若当前节点本身也被标记为 AI 测试则保留为叶子
+      return node.data.aiTest ? { data: node.data, children: [] } : null
+    }
+    return { data: node.data, children: kept }
+  }
+  const result = prune(clone)
+  return result || { data: clone.data, children: [] }
 }
 
 function onPickFile() {
@@ -693,18 +782,41 @@ function onMindMapUpdate(value: MindMapNode) {
 function downloadJson() {
   const data = mindMapRef.value?.exportData() || mindMapData.value
   if (!data) return
+  // 同步最新的导图数据，再弹出导出选项
+  mindMapData.value = data
+  featureCount.value = Math.max(0, flattenFeatures(data).length)
+  exportMode.value = 'all'
+  showExportModal.value = true
+}
+
+function confirmExport() {
+  const source = mindMapRef.value?.exportData() || mindMapData.value
+  if (!source) {
+    showExportModal.value = false
+    return
+  }
+  const aiOnly = exportMode.value === 'ai-only'
+  const exportedRoot = filterMindMapForExport(source, aiOnly)
+  const exportedFeatureCount = Math.max(0, flattenFeatures(exportedRoot).length)
   const payload = {
     title: title.value || '需求功能点',
     summary: summary.value,
-    featureCount: featureCount.value,
-    root: data,
+    featureCount: exportedFeatureCount,
+    root: exportedRoot,
+    exportMode: aiOnly ? 'ai-only' : 'all',
     exportedAt: new Date().toISOString(),
   }
   downloadTextFile(
     JSON.stringify(payload, null, 2),
-    `${(title.value || 'requirement-features').replace(/[\\/:*?"<>|]/g, '_')}.json`,
+    `${(title.value || 'requirement-features').replace(/[\\/:*?"<>|]/g, '_')}${
+      aiOnly ? '-ai-only' : ''
+    }.json`,
     'application/json;charset=utf-8',
   )
+  statusText.value = aiOnly
+    ? `已导出（仅 AI 测试）：${exportedFeatureCount} 个功能点`
+    : `已导出（全部）：${exportedFeatureCount} 个功能点`
+  showExportModal.value = false
 }
 
 function exportTestCases(format: 'md' | 'json') {
@@ -777,6 +889,15 @@ function normalizeImportedMindMap(raw: unknown): {
   if (!isMindMapNode(candidate)) {
     throw new Error('JSON 格式不正确：未找到有效的思维导图节点（需要 root 或 { data, children }）')
   }
+
+  // 兼容历史数据：若节点上带有「AI测试」标签但未设置 aiTest 字段，则同步标记
+  const syncAiTest = (node: MindMapNode) => {
+    const tags = node.data.tag || []
+    const hasAiTag = tags.includes(AI_TEST_TAG)
+    if (node.data.aiTest === undefined) node.data.aiTest = hasAiTag
+    for (const child of node.children || []) syncAiTest(child)
+  }
+  syncAiTest(candidate)
 
   return {
     title:
@@ -1080,6 +1201,15 @@ async function onTestCaseJsonFileChange(event: Event) {
               >
                 适应画布
               </button>
+              <button
+                type="button"
+                class="ghost"
+                :disabled="!mindMapData"
+                :class="{ 'ghost--active': showAiTestPanel }"
+                @click="showAiTestPanel = !showAiTestPanel"
+              >
+                AI测试选择{{ featureList.length ? ` (${aiTestCount}/${featureList.length})` : '' }}
+              </button>
               <button type="button" class="ghost" @click="onPickMindMapJson">
                 导入功能点 JSON
               </button>
@@ -1160,6 +1290,45 @@ async function onTestCaseJsonFileChange(event: Event) {
 
         <template v-else>
           <section
+            v-if="mainTab === 'map' && showAiTestPanel && featureList.length"
+            class="ai-test-panel"
+          >
+            <div class="ai-test-panel__head">
+              <div class="ai-test-panel__title">
+                <span>是否 AI 测试</span>
+                <span class="ai-test-panel__count">{{ aiTestCount }} / {{ featureList.length }}</span>
+              </div>
+              <div class="ai-test-panel__actions">
+                <button type="button" class="ghost mini" @click="setAllAiTest(true)">
+                  全选
+                </button>
+                <button type="button" class="ghost mini" @click="setAllAiTest(false)">
+                  全不选
+                </button>
+                <button type="button" class="ghost mini" @click="showAiTestPanel = false">
+                  收起
+                </button>
+              </div>
+            </div>
+            <div class="ai-test-panel__list">
+              <label
+                v-for="item in featureList"
+                :key="item.path"
+                class="ai-test-item"
+                :title="item.path"
+              >
+                <input
+                  type="checkbox"
+                  :checked="!!item.aiTest"
+                  @change="toggleFeatureAiTest(item.path, ($event.target as HTMLInputElement).checked)"
+                />
+                <span class="ai-test-item__path">{{ item.path }}</span>
+              </label>
+            </div>
+            <p class="hint">勾选后导图节点会标记「AI测试」标签；导出时可选择只导出勾选的功能点。</p>
+          </section>
+
+          <section
             v-if="mainTab === 'map' && showGenerationPanel && progressiveMapVisible"
             class="map-stream-status"
             :class="{ error: !!generationError }"
@@ -1203,7 +1372,7 @@ async function onTestCaseJsonFileChange(event: Event) {
           <div v-if="mainTab === 'map' && !progressiveMapVisible" class="tips">
             <span>逻辑图布局（XMind 风格）</span>
             <span>双击节点可编辑文字</span>
-            <span>左侧列表可删除功能点</span>
+            <span>工具栏「AI测试选择」可勾选需要 AI 测试的功能点</span>
             <span>可导入/导出 JSON 思维导图</span>
           </div>
           <div v-else-if="mainTab === 'cases'" class="tips">
@@ -1215,6 +1384,55 @@ async function onTestCaseJsonFileChange(event: Event) {
         </template>
       </main>
     </div>
+
+    <Teleport to="body">
+      <div v-if="showExportModal" class="export-modal-mask" @click.self="showExportModal = false">
+        <div class="export-modal" role="dialog" aria-modal="true">
+          <h3>导出功能点</h3>
+          <p class="export-modal__desc">
+            当前共 {{ featureList.length }} 个功能点，其中 {{ aiTestCount }} 个已勾选「是否 AI 测试」。
+          </p>
+          <div class="export-modal__options">
+            <label class="export-option" :class="{ active: exportMode === 'all' }">
+              <input
+                v-model="exportMode"
+                type="radio"
+                value="all"
+                name="export-mode"
+              />
+              <div class="export-option__body">
+                <span class="export-option__title">全部导出</span>
+                <span class="export-option__desc">导出所有 {{ featureList.length }} 个功能点</span>
+              </div>
+            </label>
+            <label
+              class="export-option"
+              :class="{ active: exportMode === 'ai-only', disabled: aiTestCount === 0 }"
+            >
+              <input
+                v-model="exportMode"
+                type="radio"
+                value="ai-only"
+                name="export-mode"
+                :disabled="aiTestCount === 0"
+              />
+              <div class="export-option__body">
+                <span class="export-option__title">仅导出需要 AI 测试的</span>
+                <span class="export-option__desc">
+                  只导出已勾选的 {{ aiTestCount }} 个功能点{{
+                    aiTestCount === 0 ? '（请先在「AI测试选择」中勾选）' : ''
+                  }}
+                </span>
+              </div>
+            </label>
+          </div>
+          <div class="export-modal__actions">
+            <button type="button" class="ghost" @click="showExportModal = false">取消</button>
+            <button type="button" class="primary" @click="confirmExport">确认导出</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -1984,5 +2202,219 @@ select:focus {
   .mini-btn {
     min-height: 40px;
   }
+}
+
+.ghost--active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.ai-test-panel {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: var(--shadow-xs);
+  animation: fade-up 0.3s var(--ease-out) both;
+}
+
+.ai-test-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ai-test-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ai-test-panel__count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+}
+
+.ai-test-panel__actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ai-test-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.ai-test-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+.ai-test-item:hover {
+  background: var(--surface-hover);
+}
+
+.ai-test-item input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  margin: 0;
+  flex: 0 0 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.ai-test-item__path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 10, 18, 0.55);
+  backdrop-filter: blur(6px);
+  animation: fade-up 0.2s var(--ease-out) both;
+}
+
+.export-modal {
+  width: min(460px, 100%);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  padding: 20px;
+  box-shadow: var(--shadow-float);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.export-modal h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.export-modal__desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.export-modal__options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.export-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+
+.export-option:hover {
+  border-color: var(--border-hover);
+}
+
+.export-option.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.export-option.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.export-option input[type='radio'] {
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.export-option.disabled input[type='radio'] {
+  cursor: not-allowed;
+}
+
+.export-option__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.export-option__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.export-option__desc {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.export-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.export-modal__actions .primary,
+.export-modal__actions .ghost {
+  width: auto;
+  margin-top: 0;
+  min-width: 88px;
 }
 </style>
