@@ -150,4 +150,37 @@ describe('FeatureMindMap', () => {
 
     expect(tooltip?.style.display).toBe('none')
   })
+
+  it('emits nodeClick with the path from root when a node is clicked', async () => {
+    wrapper = mount(FeatureMindMap, {
+      props: { modelValue: initialMap, readonly: true },
+    })
+    await vi.waitFor(() => expect(wrapper?.emitted('ready')).toHaveLength(1))
+
+    // 构造带 parent 链的模拟节点：root -> 登录 -> 账号输入
+    const rootLike = { isRoot: true, nodeData: { data: { text: '账号系统' } } }
+    const loginLike = {
+      isRoot: false,
+      parent: rootLike,
+      nodeData: { data: { text: '登录' } },
+    }
+    const inputLike = {
+      isRoot: false,
+      parent: loginLike,
+      nodeData: { data: { text: '账号输入' } },
+    }
+
+    mindMapMock.handlers.get('node_click')?.(inputLike)
+    await nextTick()
+
+    const events = wrapper?.emitted('nodeClick')
+    expect(events).toHaveLength(1)
+    expect(events?.[0]).toEqual([['登录', '账号输入']])
+
+    // 点击根节点时应发出空路径
+    mindMapMock.handlers.get('node_click')?.(rootLike)
+    await nextTick()
+    const rootEvents = wrapper?.emitted('nodeClick')
+    expect(rootEvents?.[1]).toEqual([[]])
+  })
 })

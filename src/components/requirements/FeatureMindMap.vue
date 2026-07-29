@@ -16,6 +16,8 @@ const props = withDefaults(
 const emit = defineEmits<{
   'update:modelValue': [value: MindMapNode]
   ready: []
+  /** 点击思维导图节点时触发，path 为从根节点（不含）到点击节点的文本路径 */
+  nodeClick: [path: string[]]
 }>()
 
 const containerRef = ref<HTMLDivElement | null>(null)
@@ -176,8 +178,32 @@ async function createMindMap() {
     emit('update:modelValue', data)
   })
   mindMap.on('node_tree_render_start', hideNoteTooltip)
+  mindMap.on('node_click', (node: unknown) => {
+    const path = buildNodePath(node)
+    if (path !== null) emit('nodeClick', path)
+  })
 
   emit('ready')
+}
+
+/** 根据库内部 MindMapNode 实例还原出从根（不含）到该节点的文本路径 */
+function buildNodePath(node: unknown): string[] | null {
+  if (!node || typeof node !== 'object') return null
+  const inst = node as {
+    isRoot?: boolean
+    parent?: unknown
+    nodeData?: { data?: { text?: string } }
+  }
+  if (typeof inst.isRoot !== 'boolean') return null
+  const path: string[] = []
+  let current: typeof inst | undefined = inst
+  while (current && !current.isRoot) {
+    const text = current.nodeData?.data?.text
+    if (typeof text !== 'string' || !text) return null
+    path.unshift(text)
+    current = current.parent as typeof inst | undefined
+  }
+  return path
 }
 
 function destroyMindMap() {

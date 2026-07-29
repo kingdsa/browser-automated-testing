@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import AppNav from '@/components/requirements/AppNav.vue'
 import FeatureMindMap from '@/components/requirements/FeatureMindMap.vue'
 import GenerationStreamPanel from '@/components/requirements/GenerationStreamPanel.vue'
@@ -54,6 +54,8 @@ const readonlyMap = ref(false)
 
 /** 功能点「是否 AI 测试」勾选面板可见性 */
 const showAiTestPanel = ref(false)
+/** 「是否 AI 测试」面板当前聚焦的层级路径：从根节点的子层开始，空数组表示聚焦在根（展示一级内容） */
+const aiTestFocusPath = ref<string[]>([])
 /** 导出功能点时弹出选择：全部 / 仅 AI 测试 */
 const showExportModal = ref(false)
 const exportMode = ref<'all' | 'ai-only'>('all')
@@ -163,55 +165,118 @@ function flattenFeatures(
   return acc
 }
 
-/** 勾选/取消勾选某个功能点的「是否 AI 测试」标记，并在思维导图节点上同步视觉标签 */
-function toggleFeatureAiTest(path: string, value: boolean) {
-  if (!mindMapData.value) return
-  const segments = path.split(' / ')
-  const root = JSON.parse(JSON.stringify(mindMapData.value)) as MindMapNode
-
-  const apply = (node: MindMapNode, depth: number): boolean => {
-    if (depth < segments.length && node.data.text !== segments[depth]) return false
-    if (depth === segments.length - 1) {
-      node.data.aiTest = value
-      const tags = node.data.tag ? [...node.data.tag] : []
-      const hasTag = tags.includes(AI_TEST_TAG)
-      if (value && !hasTag) tags.push(AI_TEST_TAG)
-      else if (!value && hasTag) {
-        const idx = tags.indexOf(AI_TEST_TAG)
-        if (idx >= 0) tags.splice(idx, 1)
-      }
-      node.data.tag = tags.length ? tags : undefined
-      return true
-    }
-    for (const child of node.children || []) {
-      if (apply(child, depth + 1)) return true
-    }
-    return false
+/** 在子树中按 path 段落查找目标节点 */
+function findNodeBySegments(root: MindMapNode, segments: string[]): MindMapNode | null {
+  let node: MindMapNode = root
+  for (const segment of segments) {
+    const next = (node.children || []).find((child) => child.data.text === segment)
+    if (!next) return null
+    node = next
   }
+  return node
+}
 
-  apply(root, 0)
+/** 将节点及其所有子孙节点的「是否 AI 测试」标记同步为 value */
+function applyAiTestToSubtree(node: MindMapNode, value: boolean) {
+  node.data.aiTest = value
+  const tags = node.data.tag ? [...node.data.tag] : []
+  const hasTag = tags.includes(AI_TEST_TAG)
+  if (value && !hasTag) tags.push(AI_TEST_TAG)
+  else if (!value && hasTag) {
+    const idx = tags.indexOf(AI_TEST_TAG)
+    if (idx >= 0) tags.splice(idx, 1)
+  }
+  node.data.tag = tags.length ? tags : undefined
+  for (const child of node.children || []) applyAiTestToSubtree(child, value)
+}
+
+/** 当前聚焦层级对应的节点（基于 mindMapData 与 aiTestFocusPath） */
+const aiTestFocusNode = computed<MindMapNode | null>(() => {
+  if (!mindMapData.value) return null
+  return findNodeBySegments(mindMapData.value, aiTestFocusPath.value)
+})
+
+/** 当前层级下需要展示的子项（即聚焦节点的直接子节点） */
+const aiTestItems = computed(() => {
+  const node = aiTestFocusNode.value
+  if (!node) return []
+  return (node.children || []).map((child) => ({
+    text: child.data.text,
+    aiTest: child.data.aiTest,
+    hasChildren: Boolean(child.children && child.children.length),
+  }))
+})
+
+/** 面包屑：第一项是根节点文案，后续依次为 aiTestFocusPath 各段 */
+const aiTestBreadcrumb = computed(() => {
+  const items: Array<{ label: string; depth: number }> = []
+  items.push({ label: mindMapData.value?.data.text || '全部', depth: -1 })
+  aiTestFocusPath.value.forEach((segment, index) => {
+    items.push({ label: segment, depth: index })
+  })
+  return items
+})
+
+/** 当前层级已勾选数量（用于面板头部展示） */
+const aiTestFocusSelectedCount = computed(
+  () => aiTestItems.value.filter((item) => item.aiTest).length,
+)
+
+/** 当聚焦路径与新导图不匹配时自动回退到根层级 */
+watch(aiTestFocusNode, (node) => {
+  if (!node && aiTestFocusPath.value.length > 0 && mindMapData.value) {
+    aiTestFocusPath.value = []
+  }
+})
+
+/** 勾选/取消勾选当前层级下某个子项，并递归作用于其所有子孙节点 */
+function toggleAiTestForFocusChild(childText: string, value: boolean) {
+  if (!mindMapData.value) return
+  const root = JSON.parse(JSON.stringify(mindMapData.value)) as MindMapNode
+  const focus = findNodeBySegments(root, aiTestFocusPath.value)
+  if (!focus) return
+  const child = (focus.children || []).find((item) => item.data.text === childText)
+  if (!child) return
+  applyAiTestToSubtree(child, value)
   mindMapData.value = root
 }
 
-/** 一键全选 / 全不选「是否 AI 测试」 */
+/** 在当前层级下双击某个子项，进入它的下一级 */
+function drillIntoFocusChild(childText: string) {
+  const focus = aiTestFocusNode.value
+  if (!focus) return
+  const child = (focus.children || []).find((item) => item.data.text === childText)
+  if (!child || !child.children || child.children.length === 0) return
+  aiTestFocusPath.value = [...aiTestFocusPath.value, childText]
+}
+
+/** 通过面包屑跳转到指定层级（depth=-1 表示根） */
+function setAiTestFocusDepth(depth: number) {
+  if (depth < 0) {
+    aiTestFocusPath.value = []
+    return
+  }
+  aiTestFocusPath.value = aiTestFocusPath.value.slice(0, depth + 1)
+}
+
+/** 思维导图节点被点击时，将面板聚焦路径同步到该节点 */
+function onMindMapNodeClick(path: string[]) {
+  // 校验路径在新数据里仍然有效；无效则忽略
+  if (!mindMapData.value) return
+  const node = findNodeBySegments(mindMapData.value, path)
+  if (!node) return
+  aiTestFocusPath.value = [...path]
+}
+
+/** 一键全选 / 全不选「是否 AI 测试」（作用于当前聚焦层级的所有子项及其子孙） */
 function setAllAiTest(value: boolean) {
   if (!mindMapData.value) return
   const root = JSON.parse(JSON.stringify(mindMapData.value)) as MindMapNode
-  const walk = (node: MindMapNode, isRoot: boolean) => {
-    if (!isRoot) {
-      node.data.aiTest = value
-      const tags = node.data.tag ? [...node.data.tag] : []
-      const hasTag = tags.includes(AI_TEST_TAG)
-      if (value && !hasTag) tags.push(AI_TEST_TAG)
-      else if (!value && hasTag) {
-        const idx = tags.indexOf(AI_TEST_TAG)
-        if (idx >= 0) tags.splice(idx, 1)
-      }
-      node.data.tag = tags.length ? tags : undefined
-    }
-    for (const child of node.children || []) walk(child, false)
+  const focus = findNodeBySegments(root, aiTestFocusPath.value)
+  if (!focus) return
+  for (const child of focus.children || []) {
+    applyAiTestToSubtree(child, value)
   }
-  walk(root, true)
   mindMapData.value = root
 }
 
@@ -1296,7 +1361,9 @@ async function onTestCaseJsonFileChange(event: Event) {
             <div class="ai-test-panel__head">
               <div class="ai-test-panel__title">
                 <span>是否 AI 测试</span>
-                <span class="ai-test-panel__count">{{ aiTestCount }} / {{ featureList.length }}</span>
+                <span class="ai-test-panel__count">
+                  {{ aiTestFocusSelectedCount }} / {{ aiTestItems.length }}
+                </span>
               </div>
               <div class="ai-test-panel__actions">
                 <button type="button" class="ghost mini" @click="setAllAiTest(true)">
@@ -1310,22 +1377,50 @@ async function onTestCaseJsonFileChange(event: Event) {
                 </button>
               </div>
             </div>
-            <div class="ai-test-panel__list">
+            <div class="ai-test-panel__breadcrumb">
+              <template v-for="(crumb, idx) in aiTestBreadcrumb" :key="`${crumb.depth}-${idx}`">
+                <button
+                  type="button"
+                  class="crumb"
+                  :class="{ active: idx === aiTestBreadcrumb.length - 1 }"
+                  :disabled="idx === aiTestBreadcrumb.length - 1"
+                  :title="crumb.label"
+                  @click="setAiTestFocusDepth(crumb.depth)"
+                >
+                  {{ crumb.label }}
+                </button>
+                <span v-if="idx < aiTestBreadcrumb.length - 1" class="crumb__sep">/</span>
+              </template>
+            </div>
+            <div v-if="aiTestItems.length" class="ai-test-panel__list">
               <label
-                v-for="item in featureList"
-                :key="item.path"
+                v-for="item in aiTestItems"
+                :key="item.text"
                 class="ai-test-item"
-                :title="item.path"
+                :class="{ 'ai-test-item--drillable': item.hasChildren }"
+                :title="
+                  item.hasChildren ? `${item.text}（双击进入下级）` : item.text
+                "
+                @dblclick="item.hasChildren && drillIntoFocusChild(item.text)"
               >
                 <input
                   type="checkbox"
                   :checked="!!item.aiTest"
-                  @change="toggleFeatureAiTest(item.path, ($event.target as HTMLInputElement).checked)"
+                  @change="
+                    toggleAiTestForFocusChild(
+                      item.text,
+                      ($event.target as HTMLInputElement).checked,
+                    )
+                  "
                 />
-                <span class="ai-test-item__path">{{ item.path }}</span>
+                <span class="ai-test-item__path">{{ item.text }}</span>
+                <span v-if="item.hasChildren" class="ai-test-item__hint">双击进入下级 ›</span>
               </label>
             </div>
-            <p class="hint">勾选后导图节点会标记「AI测试」标签；导出时可选择只导出勾选的功能点。</p>
+            <p v-else class="hint">当前层级没有下一级内容。</p>
+            <p class="hint">
+              勾选某项后会同时选中其下所有子级；双击可进入下一级；点击导图节点可跳转到对应层级。
+            </p>
           </section>
 
           <section
@@ -1357,6 +1452,7 @@ async function onTestCaseJsonFileChange(event: Event) {
             :model-value="mindMapData"
             :readonly="readonlyMap || (analyzing && progressiveMapVisible)"
             @update:model-value="onMindMapUpdate"
+            @node-click="onMindMapNodeClick"
           />
 
           <TestCasePanel
@@ -1373,6 +1469,7 @@ async function onTestCaseJsonFileChange(event: Event) {
             <span>逻辑图布局（XMind 风格）</span>
             <span>双击节点可编辑文字</span>
             <span>工具栏「AI测试选择」可勾选需要 AI 测试的功能点</span>
+            <span>点击导图节点可切换「是否 AI 测试」面板的当前层级</span>
             <span>可导入/导出 JSON 思维导图</span>
           </div>
           <div v-else-if="mainTab === 'cases'" class="tips">
@@ -2265,6 +2362,56 @@ select:focus {
   padding-right: 4px;
 }
 
+.ai-test-panel__breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 8px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.ai-test-panel__breadcrumb .crumb {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background-color var(--duration-fast) var(--ease-out);
+}
+
+.ai-test-panel__breadcrumb .crumb:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ai-test-panel__breadcrumb .crumb.active {
+  color: var(--text);
+  font-weight: 600;
+  cursor: default;
+}
+
+.ai-test-panel__breadcrumb .crumb:disabled {
+  cursor: default;
+}
+
+.ai-test-panel__breadcrumb .crumb__sep {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
 .ai-test-item {
   display: flex;
   align-items: center;
@@ -2278,6 +2425,10 @@ select:focus {
 
 .ai-test-item:hover {
   background: var(--surface-hover);
+}
+
+.ai-test-item--drillable {
+  cursor: zoom-in;
 }
 
 .ai-test-item input[type='checkbox'] {
@@ -2297,6 +2448,14 @@ select:focus {
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-test-item__hint {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--accent);
+  opacity: 0.7;
   white-space: nowrap;
 }
 
