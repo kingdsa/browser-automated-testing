@@ -3,6 +3,8 @@ export interface MindMapNodeData {
   note?: string
   tag?: string[]
   expand?: boolean
+  /** 是否需要 AI 测试（默认不勾选） */
+  aiTest?: boolean
 }
 
 export interface MindMapNode {
@@ -34,6 +36,8 @@ export interface FeaturePoint {
   text: string
   note?: string
   tags?: string[]
+  /** 是否需要 AI 测试（默认不勾选） */
+  aiTest?: boolean
 }
 
 export type TestCasePriority = 'P0' | 'P1' | 'P2' | 'P3'
