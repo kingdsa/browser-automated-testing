@@ -233,8 +233,43 @@ function parseAnalysisResult(
   raw: string,
   fileName: string,
   content: string,
+  options?: {
+    fallbackSnapshot?: MindMapProgressSnapshot | null
+    onFallback?: (reason: string) => void
+  },
 ): RequirementAnalysisResult {
-  if (!raw.trim()) throw new Error('模型未返回分析结果')
+  const fallbackSnapshot = options?.fallbackSnapshot ?? null
+  const onFallback = options?.onFallback
+  const fallbackTitle = fileName.replace(/\.[^.]+$/, '') || '需求功能点'
+
+  // 优先用渐进式快照兜底（结构完整），没有快照则降级为文本拆分（扁平列表）
+  const degrade = (snapshotReason: string, textSplitSummary: string): RequirementAnalysisResult => {
+    if (fallbackSnapshot) {
+      onFallback?.(snapshotReason)
+      return {
+        title: fallbackSnapshot.title,
+        summary: fallbackSnapshot.summary,
+        root: fallbackSnapshot.root,
+        featureCount: fallbackSnapshot.featureCount,
+      }
+    }
+    onFallback?.(textSplitSummary)
+    const root = fallbackTree(fallbackTitle, textSplitSummary, content)
+    return { title: fallbackTitle, summary: textSplitSummary, root, featureCount: countFeatures(root) }
+  }
+
+  if (!raw.trim()) {
+    if (fallbackSnapshot) {
+      onFallback?.('模型未返回 content，已启用渐进式快照兜底')
+      return {
+        title: fallbackSnapshot.title,
+        summary: fallbackSnapshot.summary,
+        root: fallbackSnapshot.root,
+        featureCount: fallbackSnapshot.featureCount,
+      }
+    }
+    throw new Error('模型未返回分析结果')
+  }
 
   let parsed: unknown
   try {
@@ -242,28 +277,19 @@ function parseAnalysisResult(
   } catch {
     const match = raw.match(/\{[\s\S]*\}/)
     if (!match) {
-      const title = fileName.replace(/\.[^.]+$/, '') || '需求功能点'
-      const root = fallbackTree(title, '模型返回非 JSON，已降级为文本拆分', content)
-      return {
-        title,
-        summary: '模型返回非 JSON，已降级为文本拆分',
-        root,
-        featureCount: countFeatures(root),
-      }
+      return degrade('模型返回非 JSON，已启用渐进式快照兜底', '模型返回非 JSON，已降级为文本拆分')
     }
-    parsed = JSON.parse(match[0])
+    try {
+      parsed = JSON.parse(match[0])
+    } catch {
+      // 提取出的 JSON 片段仍有语法错误（通常是模型输出被截断），走兜底
+      return degrade('JSON 语法错误，已启用渐进式快照兜底', '模型返回非合法 JSON，已降级为文本拆分')
+    }
   }
 
   const validated = analysisSchema.safeParse(parsed)
   if (!validated.success) {
-    const title = fileName.replace(/\.[^.]+$/, '') || '需求功能点'
-    const root = fallbackTree(title, '模型结构不完整，已降级为文本拆分', content)
-    return {
-      title,
-      summary: '模型结构不完整，已降级为文本拆分',
-      root,
-      featureCount: countFeatures(root),
-    }
+    return degrade('模型结构不完整，已启用渐进式快照兜底', '模型结构不完整，已降级为文本拆分')
   }
 
   const root = sanitizeNode(validated.data.root)
@@ -367,7 +393,10 @@ export async function streamAnalyzeRequirementDocument(input: {
     )
 
     let raw = ''
+    let reasoningRaw = ''
+    let lastSnapshot: MindMapProgressSnapshot | null = null
     const progressiveParser = new StreamingMindMapParser((snapshot) => {
+      lastSnapshot = snapshot
       emit({ type: 'mindmap', data: snapshot })
     })
     for await (const chunk of jsonStream) {
@@ -378,6 +407,7 @@ export async function streamAnalyzeRequirementDocument(input: {
       const nativeReasoning = extractCompatibleReasoning(choiceDelta)
       if (nativeReasoning) {
         emit({ type: 'reasoning', data: { content: nativeReasoning } })
+        reasoningRaw += nativeReasoning
       }
 
       if (!choiceDelta.content) continue
@@ -389,7 +419,21 @@ export async function streamAnalyzeRequirementDocument(input: {
     if (signal?.aborted) throw createAbortError()
 
     emit({ type: 'status', data: { message: '模型输出完成，正在解析功能点结构...' } })
-    const result = parseAnalysisResult(raw, fileName, content)
+
+    // 兜底：部分模型/网关会把 JSON 全部输出到 reasoning 通道（content 一直为空），
+    // 此时用 reasoning 累加值参与解析，避免误报"模型未返回分析结果"。
+    // parseAnalysisResult 内部已对非纯 JSON（带思考文本、代码块）做了容错。
+    const effectiveRaw = raw.trim() ? raw : reasoningRaw
+    if (!raw.trim() && reasoningRaw.trim()) {
+      emit({
+        type: 'status',
+        data: { message: '检测到输出走 reasoning 通道，已启用兜底解析...' },
+      })
+    }
+    const result = parseAnalysisResult(effectiveRaw, fileName, content, {
+      fallbackSnapshot: lastSnapshot,
+      onFallback: (reason) => emit({ type: 'status', data: { message: reason } }),
+    })
     emit({ type: 'result', data: result })
     emit({ type: 'done', data: {} })
     return result
