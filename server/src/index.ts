@@ -30,6 +30,8 @@ app.get('/', (_req, res) => {
       '/api/browser/tabs',
       '/api/chat',
       '/api/requirements/analyze',
+      '/api/requirements/analyze/stream',
+      '/api/requirements/mindmap/stream',
       '/api/requirements/extract',
       '/api/requirements/test-cases',
       '/screenshots/*',

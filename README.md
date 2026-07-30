@@ -173,15 +173,22 @@ npm run dev
 
 ### 运行时数据流
 
-**需求分析（流式）**
+**需求分析（流式，分两阶段）**
 
 ```text
+阶段一：分析文档
 前端 multipart/json
-  → POST /api/requirements/analyze/stream
-  → 解析文档 / 组装 prompt
-  → LLM stream deltas（SSE: status / delta / mindmap）
-  → 解析 JSON 结果（SSE: result）
-  → done；客户端断开即可取消
+  -> POST /api/requirements/analyze/stream
+  -> 解析文档 / 组装 prompt
+  -> LLM stream deltas（SSE: status / reasoning / result[reasoningSummary] / meta）
+  -> done；客户端断开即可取消
+
+阶段二：生成思维导图 JSON（基于阶段一的分析结果）
+前端 json（content + reasoning + fileName）
+  -> POST /api/requirements/mindmap/stream
+  -> 以分析结果为主要依据组装 prompt
+  -> LLM 输出 JSON（SSE: status / delta / mindmap / result）
+  -> done；客户端断开即可取消
 ```
 
 **测试用例生成（可选页面落地）**
@@ -308,7 +315,29 @@ DESIGN.md                    # UI 设计规范
 
 ### `POST /api/requirements/analyze/stream`
 
-同上，但以 SSE 流式返回：`status` / `delta` / `result` / `error` / `done`。客户端断开连接可取消生成。
+上传需求文档或粘贴文本，AI 流式输出需求分析（推理）过程。SSE 事件：`status` / `skills` / `reasoning` / `result`（含 `reasoningSummary`）/ `meta`（含提取后的 `content`）/ `error` / `done`。
+
+`multipart/form-data`：
+
+| 字段 | 说明 |
+| --- | --- |
+| `llm` | JSON 字符串：`{ baseUrl, apiKey, model }` |
+| `content` | 可选，粘贴的需求正文 |
+| `fileName` | 可选，文件名提示 |
+| `file` | 可选，上传的需求文档 |
+
+### `POST /api/requirements/mindmap/stream`
+
+基于阶段一的分析结果生成思维导图 JSON。思维导图的功能点划分严格依据分析内容，不自由发散。SSE 事件：`status` / `delta` / `mindmap`（渐进式快照）/ `result` / `meta` / `error` / `done`。
+
+`application/json`：
+
+| 字段 | 说明 |
+| --- | --- |
+| `llm` | `{ baseUrl, apiKey, model }` |
+| `content` | 需求正文（由阶段一 `meta` 返回） |
+| `fileName` | 可选，文件名 |
+| `reasoning` | 阶段一的分析摘要（`reasoningSummary`） |
 
 ### `POST /api/requirements/extract`
 

@@ -27,15 +27,25 @@ export interface RequirementAnalysisResult {
   featureCount: number
 }
 
-export type RequirementStreamEvent =
+export type RequirementAnalyzeStreamEvent =
   | { type: 'status'; data: { message: string } }
   | { type: 'reasoning'; data: { content: string } }
+  | { type: 'skills'; data: { skills: CategorySkillMeta[] } }
+  | { type: 'result'; data: { reasoningSummary: string } }
+  | { type: 'error'; data: { message: string } }
+  | { type: 'done'; data: Record<string, never> }
+
+export type MindMapStreamEvent =
+  | { type: 'status'; data: { message: string } }
   | { type: 'delta'; data: { content: string } }
   | { type: 'mindmap'; data: MindMapProgressSnapshot }
   | { type: 'result'; data: RequirementAnalysisResult }
   | { type: 'error'; data: { message: string } }
   | { type: 'done'; data: Record<string, never> }
-  | { type: 'skills'; data: { skills: CategorySkillMeta[] } }
+
+export interface RequirementAnalyzeResult {
+  reasoningSummary: string
+}
 
 const mindMapNodeSchema: z.ZodType<MindMapNode> = z.lazy(() =>
   z.object({
@@ -149,7 +159,8 @@ JSON 结构必须是：
 - 根节点 text 用产品/模块总称；children 按"模块 -> 功能 -> 子功能/规则"分层。
 - 每个功能点 text 简洁（<= 20 字），必要时用 note 补充验收点/业务规则。
 - 至少输出 5 个功能点；如果文档很短，也尽量结构化拆分。
-- 只关注黑盒行为，不假设数据库表、API 字段、代码结构。`
+- 只关注黑盒行为，不假设数据库表、API 字段、代码结构。
+- 若用户消息中包含"需求分析结果"，思维导图的功能点划分、层级与边界必须与该分析保持一致；不得脱离分析自行重新拆解或遗漏分析中已识别的功能点。`
 
 function buildReasoningUserPrompt(fileName: string, content: string): string {
   return `文件名：${fileName || '未命名需求文档'}
@@ -159,13 +170,22 @@ ${clipRequirement(content)}`
 }
 
 function buildJsonUserPrompt(fileName: string, content: string, reasoningSummary = ''): string {
-  const reasoningContext = reasoningSummary.trim()
-    ? `\n\n前置分析摘要（仅用于辅助结构化，不要原样输出）：\n${reasoningSummary.slice(0, 8000)}`
-    : ''
+  const reasoning = reasoningSummary.trim()
+  if (reasoning) {
+    return `文件名：${fileName || '未命名需求文档'}
+
+## 需求分析结果（思维导图必须严格基于以下分析内容生成，不得脱离分析自由发散）
+
+${reasoning.slice(0, 8000)}
+
+## 需求原文（仅供核对细节，不作为结构化主要依据）
+
+${clipRequirement(content)}`
+  }
   return `文件名：${fileName || '未命名需求文档'}
 
 需求文档内容：
-${clipRequirement(content)}${reasoningContext}`
+${clipRequirement(content)}`
 }
 
 function extractCompatibleReasoning(delta: unknown): string {
@@ -306,8 +326,13 @@ export async function analyzeRequirementDocument(input: {
   content: string
   fileName?: string
 }): Promise<RequirementAnalysisResult> {
-  return streamAnalyzeRequirementDocument({
+  const { reasoningSummary } = await streamAnalyzeRequirementDocument({
     ...input,
+    onEvent: () => undefined,
+  })
+  return streamGenerateMindMap({
+    ...input,
+    reasoning: reasoningSummary,
     onEvent: () => undefined,
   })
 }
@@ -317,8 +342,8 @@ export async function streamAnalyzeRequirementDocument(input: {
   content: string
   fileName?: string
   signal?: AbortSignal
-  onEvent?: (event: RequirementStreamEvent) => void
-}): Promise<RequirementAnalysisResult> {
+  onEvent?: (event: RequirementAnalyzeStreamEvent) => void
+}): Promise<RequirementAnalyzeResult> {
   const { llm, content, fileName = 'requirement.md', signal, onEvent } = input
   const emit = onEvent || (() => undefined)
 
@@ -329,31 +354,25 @@ export async function streamAnalyzeRequirementDocument(input: {
   emit({ type: 'skills', data: { skills } })
 
   const skillSystemPrompt = composeCategorySystemPrompt(skills)
-  const jsonSystemPrompt = skillSystemPrompt
-    ? `${skillSystemPrompt}${JSON_OUTPUT_CONSTRAINT}`
-    : JSON_OUTPUT_CONSTRAINT.trim()
-
   const client = createClient(llm)
   emit({ type: 'status', data: { message: 'AI 正在梳理需求目标、业务规则和测试边界...' } })
 
   try {
-    const reasoningStream = skillSystemPrompt
-      ? await client.chat.completions.create(
-          {
-            model: llm.model,
-            temperature: 0.2,
-            stream: true,
-            messages: [
-              { role: 'system', content: skillSystemPrompt },
-              { role: 'user', content: buildReasoningUserPrompt(fileName, content) },
-            ],
-          },
-          { signal },
-        )
-      : null
-
     let reasoningSummary = ''
-    if (reasoningStream) {
+    if (skillSystemPrompt) {
+      const reasoningStream = await client.chat.completions.create(
+        {
+          model: llm.model,
+          temperature: 0.2,
+          stream: true,
+          messages: [
+            { role: 'system', content: skillSystemPrompt },
+            { role: 'user', content: buildReasoningUserPrompt(fileName, content) },
+          ],
+        },
+        { signal },
+      )
+
       for await (const chunk of reasoningStream) {
         if (signal?.aborted) throw createAbortError()
         const choiceDelta = chunk.choices?.[0]?.delta
@@ -371,14 +390,54 @@ export async function streamAnalyzeRequirementDocument(input: {
       }
 
       if (signal?.aborted) throw createAbortError()
-      emit({ type: 'status', data: { message: '分析过程完成，正在生成思维导图 JSON...' } })
+      emit({ type: 'status', data: { message: '需求分析完成，可生成思维导图 JSON。' } })
     } else {
       emit({
         type: 'status',
-        data: { message: '未加载 function-point skill，直接生成 JSON...' },
+        data: { message: '未加载 function-point skill，可直接生成思维导图 JSON。' },
       })
     }
 
+    emit({ type: 'result', data: { reasoningSummary } })
+    emit({ type: 'done', data: {} })
+    return { reasoningSummary }
+  } catch (error) {
+    if (isAbortError(error, signal)) throw createAbortError()
+    throw error
+  }
+}
+
+export async function streamGenerateMindMap(input: {
+  llm: LlmSettings
+  content: string
+  fileName?: string
+  reasoning?: string
+  signal?: AbortSignal
+  onEvent?: (event: MindMapStreamEvent) => void
+}): Promise<RequirementAnalysisResult> {
+  const {
+    llm,
+    content,
+    fileName = 'requirement.md',
+    reasoning = '',
+    signal,
+    onEvent,
+  } = input
+  const emit = onEvent || (() => undefined)
+
+  assertLlmReady(llm, content)
+  if (signal?.aborted) throw createAbortError()
+
+  const skills = await loadSelectedCategorySkills('function-point')
+  const skillSystemPrompt = composeCategorySystemPrompt(skills)
+  const jsonSystemPrompt = skillSystemPrompt
+    ? `${skillSystemPrompt}${JSON_OUTPUT_CONSTRAINT}`
+    : JSON_OUTPUT_CONSTRAINT.trim()
+
+  const client = createClient(llm)
+  emit({ type: 'status', data: { message: '正在生成思维导图 JSON...' } })
+
+  try {
     const jsonStream = await client.chat.completions.create(
       {
         model: llm.model,
@@ -386,7 +445,7 @@ export async function streamAnalyzeRequirementDocument(input: {
         stream: true,
         messages: [
           { role: 'system', content: jsonSystemPrompt },
-          { role: 'user', content: buildJsonUserPrompt(fileName, content, reasoningSummary) },
+          { role: 'user', content: buildJsonUserPrompt(fileName, content, reasoning) },
         ],
       },
       { signal },
@@ -406,7 +465,6 @@ export async function streamAnalyzeRequirementDocument(input: {
 
       const nativeReasoning = extractCompatibleReasoning(choiceDelta)
       if (nativeReasoning) {
-        emit({ type: 'reasoning', data: { content: nativeReasoning } })
         reasoningRaw += nativeReasoning
       }
 
