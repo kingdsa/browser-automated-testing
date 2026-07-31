@@ -40,6 +40,11 @@ export const config = {
     apiKey: process.env.LLM_API_KEY || '',
     model: process.env.LLM_MODEL || 'gpt-4o-mini',
   },
+  requirementsGenerationMaxDurationMs: Number(
+    process.env.REQUIREMENTS_AI_MAX_RUN_MS || 60 * 60 * 1000,
+  ),
+  requirementsNoProgressLimit: Number(process.env.REQUIREMENTS_AI_NO_PROGRESS_LIMIT || 3),
+  requirementsRetryBaseDelayMs: Number(process.env.REQUIREMENTS_AI_RETRY_BASE_DELAY_MS || 1000),
   defaultMaxSteps: Number(process.env.MAX_AGENT_STEPS || 0),
   defaultHeadless: resolveDefaultHeadless(),
   canUseHeadedBrowser: canUseHeadedBrowser(),

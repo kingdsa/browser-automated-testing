@@ -47,4 +47,16 @@ describe('StreamingMindMapParser', () => {
     expect(snapshots).toHaveLength(1)
     expect(snapshots[0]?.root.data.text).toBe('未完成前不会出现')
   })
+
+  it('ignores prose braces before the actual JSON document', () => {
+    const snapshots: MindMapProgressSnapshot[] = []
+    const parser = new StreamingMindMapParser((snapshot) => snapshots.push(snapshot))
+
+    parser.write('推理示例 {not-json}，最终结果如下：\n')
+    parser.write('{"root":{"data":{"text":"真实需求"},"children":[]},')
+    parser.write('"title":"真实需求","summary":"摘要","complete":true}')
+
+    expect(snapshots.length).toBeGreaterThan(0)
+    expect(snapshots[snapshots.length - 1]?.title).toBe('真实需求')
+  })
 })

@@ -14,12 +14,14 @@ AI 驱动的前端质量工具箱（**BAT / Signal Lab**）：从 **需求文档
 ## 功能总览
 
 ### 公共能力
+
 - 对接第三方中转站（OpenAI 兼容：`base_url` + `api_key` + `model`）
 - 配置可写在页面左侧，也可由服务端 `.env` 预填
 - 深色精密控制台 UI（Signal Lab 设计语言）
 - 页面切换 `keep-alive`，需求分析 / 浏览器测试状态互不丢失
 
 ### 需求分析
+
 - 上传需求文档（Markdown / TXT / DOCX）或直接粘贴文本
 - 上传后自动解析正文，可在文本框微调后再分析
 - **SSE 两阶段分析**：先流式展示 AI 分析摘要，再生成结构化 JSON 并切换到思维导图；支持中途取消
@@ -29,6 +31,7 @@ AI 驱动的前端质量工具箱（**BAT / Signal Lab**）：从 **需求文档
 - 测试用例导出 **Markdown / JSON**，可直接带去浏览器测试页执行
 
 ### 浏览器测试
+
 - 流式 SSE 对话，实时显示思考文本与工具轨迹
 - Playwright 控制浏览器：打开页面、点击、输入、滚动、截图、读网络/控制台
 - 登录态支持：
@@ -88,12 +91,12 @@ npm run dev
 
 常用脚本：
 
-| 命令 | 说明 |
-| --- | --- |
-| `npm run dev` | 同时启动前端（Vite 5199）与 Agent（8787） |
-| `npm run server` | 仅启动 Agent 服务 |
-| `npm run build` | 构建前端 |
-| `npm run type-check` | TypeScript 检查 |
+| 命令                 | 说明                                      |
+| -------------------- | ----------------------------------------- |
+| `npm run dev`        | 同时启动前端（Vite 5199）与 Agent（8787） |
+| `npm run server`     | 仅启动 Agent 服务                         |
+| `npm run build`      | 构建前端                                  |
+| `npm run type-check` | TypeScript 检查                           |
 
 ## 使用方式
 
@@ -181,13 +184,16 @@ npm run dev
   -> POST /api/requirements/analyze/stream
   -> 解析文档 / 组装 prompt
   -> LLM stream deltas（SSE: status / reasoning / result[reasoningSummary] / meta）
+     （服务端校验完整性标记；模型/网关实际截断时会提示并自动续写）
   -> done；客户端断开即可取消
 
 阶段二：生成思维导图 JSON（基于阶段一的分析结果）
 前端 json（content + reasoning + fileName）
   -> POST /api/requirements/mindmap/stream
   -> 以分析结果为主要依据组装 prompt
-  -> LLM 输出 JSON（SSE: status / delta / mindmap / result）
+  -> LLM 逐行输出独立 NDJSON 节点（SSE: status / mindmap）
+  -> 服务端去重、组装并输出完整合法 JSON（SSE: delta / result）
+     （正常结束即完成；模型/网关实际截断时提示并续写；异常时使用已确认节点或确定性兜底）
   -> done；客户端断开即可取消
 ```
 
@@ -244,17 +250,17 @@ DESIGN.md                    # UI 设计规范
 
 ## 浏览器 Agent 工具
 
-| 工具 | 作用 |
-| --- | --- |
-| `open_url` / `navigate` | 打开目标页 |
-| `get_page_snapshot` | 获取可交互元素快照 |
-| `click` / `type_text` / `press_key` | 交互操作 |
-| `scroll_page` / `wait_for` | 滚动与等待 |
-| `take_screenshot` | 截图证据（可通过 `/screenshots/*` 访问） |
-| `get_network_logs` | 网络请求 / 失败接口 |
-| `get_console_logs` | 控制台日志 / 错误 |
-| `get_page_info` | URL、标题、视口 |
-| `evaluate_js` | 只读页面探测 |
+| 工具                                | 作用                                     |
+| ----------------------------------- | ---------------------------------------- |
+| `open_url` / `navigate`             | 打开目标页                               |
+| `get_page_snapshot`                 | 获取可交互元素快照                       |
+| `click` / `type_text` / `press_key` | 交互操作                                 |
+| `scroll_page` / `wait_for`          | 滚动与等待                               |
+| `take_screenshot`                   | 截图证据（可通过 `/screenshots/*` 访问） |
+| `get_network_logs`                  | 网络请求 / 失败接口                      |
+| `get_console_logs`                  | 控制台日志 / 错误                        |
+| `get_page_info`                     | URL、标题、视口                          |
+| `evaluate_js`                       | 只读页面探测                             |
 
 ## API
 
@@ -306,37 +312,37 @@ DESIGN.md                    # UI 设计规范
 
 `multipart/form-data`：
 
-| 字段 | 说明 |
-| --- | --- |
-| `llm` | JSON 字符串：`{ baseUrl, apiKey, model }` |
-| `content` | 可选，粘贴的需求正文 |
-| `fileName` | 可选，文件名提示 |
-| `file` | 可选，上传的需求文档 |
+| 字段       | 说明                                      |
+| ---------- | ----------------------------------------- |
+| `llm`      | JSON 字符串：`{ baseUrl, apiKey, model }` |
+| `content`  | 可选，粘贴的需求正文                      |
+| `fileName` | 可选，文件名提示                          |
+| `file`     | 可选，上传的需求文档                      |
 
 ### `POST /api/requirements/analyze/stream`
 
-上传需求文档或粘贴文本，AI 流式输出需求分析（推理）过程。SSE 事件：`status` / `skills` / `reasoning` / `result`（含 `reasoningSummary`）/ `meta`（含提取后的 `content`）/ `error` / `done`。
+上传需求文档或粘贴文本，AI 流式输出需求分析（推理）过程。服务端不设置本地上下文窗口或输出 token 上限，也不预先分段、压缩或截断内容；首轮请求会将完整原文一次性交给模型。只有模型输出完整性标记并通过校验后才发送完成状态；模型或网关实际返回 `finish_reason=length` 时会显示上限提示并自动续写，续写次数不设固定上限。任务只会在完成、用户取消、达到总运行时限或连续无有效进展时停止。SSE 事件：`status` / `skills` / `reasoning` / `result`（含完整 `reasoningSummary`）/ `meta`（含提取后的 `content`）/ `error` / `done`。
 
 `multipart/form-data`：
 
-| 字段 | 说明 |
-| --- | --- |
-| `llm` | JSON 字符串：`{ baseUrl, apiKey, model }` |
-| `content` | 可选，粘贴的需求正文 |
-| `fileName` | 可选，文件名提示 |
-| `file` | 可选，上传的需求文档 |
+| 字段       | 说明                                      |
+| ---------- | ----------------------------------------- |
+| `llm`      | JSON 字符串：`{ baseUrl, apiKey, model }` |
+| `content`  | 可选，粘贴的需求正文                      |
+| `fileName` | 可选，文件名提示                          |
+| `file`     | 可选，上传的需求文档                      |
 
 ### `POST /api/requirements/mindmap/stream`
 
-基于阶段一的分析结果生成思维导图 JSON。思维导图的功能点划分严格依据分析内容，不自由发散。SSE 事件：`status` / `delta` / `mindmap`（渐进式快照）/ `result` / `meta` / `error` / `done`。
+基于阶段一的完整分析结果生成思维导图。服务端不设置本地 token 预算，也不预先压缩分析结果；首轮请求会将完整分析一次性交给模型。模型以 NDJSON 逐条输出产品功能节点，服务端逐行校验、去重并组装最终 JSON，因此单条截断不会破坏已确认结构。节点数量和有效续写次数不设固定上限；模型正常结束时直接完成，模型或网关实际返回 `finish_reason=length` 时会显示上限提示，并在产生新合法节点时继续。模型异常、输出不可用、续写无新增节点或未发送完成记录时，服务端会使用已确认节点或从分析文本确定性生成可绘制结果，不再清空并完整重生成。SSE 事件：`status` / `mindmap`（渐进式快照）/ `delta`（服务端生成的最终合法 JSON）/ `result` / `meta` / `error` / `done`。
 
 `application/json`：
 
-| 字段 | 说明 |
-| --- | --- |
-| `llm` | `{ baseUrl, apiKey, model }` |
-| `content` | 需求正文（由阶段一 `meta` 返回） |
-| `fileName` | 可选，文件名 |
+| 字段        | 说明                                   |
+| ----------- | -------------------------------------- |
+| `llm`       | `{ baseUrl, apiKey, model }`           |
+| `content`   | 需求正文（由阶段一 `meta` 返回）       |
+| `fileName`  | 可选，文件名                           |
 | `reasoning` | 阶段一的分析摘要（`reasoningSummary`） |
 
 ### `POST /api/requirements/extract`
@@ -372,14 +378,17 @@ DESIGN.md                    # UI 设计规范
 
 ## 环境变量
 
-| 变量 | 说明 |
-| --- | --- |
-| `PORT` | Agent 端口，默认 8787 |
-| `LLM_BASE_URL` | 默认中转站地址 |
-| `LLM_API_KEY` | 默认 API Key |
-| `LLM_MODEL` | 默认模型 |
-| `MAX_AGENT_STEPS` | 默认最大工具循环步数（`0` = 无限） |
-| `PLAYWRIGHT_HEADLESS` / `HEADLESS` | 是否默认无头；不填则自动检测（Linux 无 `DISPLAY`/`WAYLAND_DISPLAY` 时默认 `true`） |
+| 变量                                  | 说明                                                                               |
+| ------------------------------------- | ---------------------------------------------------------------------------------- |
+| `PORT`                                | Agent 端口，默认 8787                                                              |
+| `LLM_BASE_URL`                        | 默认中转站地址                                                                     |
+| `LLM_API_KEY`                         | 默认 API Key                                                                       |
+| `LLM_MODEL`                           | 默认模型                                                                           |
+| `REQUIREMENTS_AI_MAX_RUN_MS`          | 单阶段需求分析/思维导图最长运行时间，默认 3600000（60 分钟）                       |
+| `REQUIREMENTS_AI_NO_PROGRESS_LIMIT`   | 连续无有效新增内容的停止/重生成阈值，默认 3 次                                     |
+| `REQUIREMENTS_AI_RETRY_BASE_DELAY_MS` | 临时接口错误的指数退避基准时间，默认 1000 毫秒，最高 10 秒                         |
+| `MAX_AGENT_STEPS`                     | 默认最大工具循环步数（`0` = 无限）                                                 |
+| `PLAYWRIGHT_HEADLESS` / `HEADLESS`    | 是否默认无头；不填则自动检测（Linux 无 `DISPLAY`/`WAYLAND_DISPLAY` 时默认 `true`） |
 
 ## 服务器部署（无图形界面）
 
@@ -461,15 +470,15 @@ Agent 系统提示会要求最终输出 **完整、可直接保存的 Markdown �
 
 ## 与 Codex control-chrome 的关系
 
-| 能力 | Codex Desktop | 本项目 |
-| --- | --- | --- |
+| 能力                  | Codex Desktop       | 本项目                                |
+| --------------------- | ------------------- | ------------------------------------- |
 | 控制用户已登录 Chrome | ✅ 扩展/native host | ✅ 手动登录 / CDP 附着（Chromium 系） |
-| 独立可分发产品 | ❌ | ✅ |
-| 自定义中转站 LLM | 取决于 Codex 配置 | ✅ 页面可配 |
-| 流式对话 UI | Codex 内置 | ✅ 自研 |
-| Skill 驱动测试策略 | ✅ | ✅ `skills/` |
-| 需求 → 功能点 → 用例 | ❌ | ✅ 需求分析模块 |
-| 导出 Markdown 报告 | 视会话能力 | ✅ 一键保存最后一次 AI MD |
+| 独立可分发产品        | ❌                  | ✅                                    |
+| 自定义中转站 LLM      | 取决于 Codex 配置   | ✅ 页面可配                           |
+| 流式对话 UI           | Codex 内置          | ✅ 自研                               |
+| Skill 驱动测试策略    | ✅                  | ✅ `skills/`                          |
+| 需求 → 功能点 → 用例  | ❌                  | ✅ 需求分析模块                       |
+| 导出 Markdown 报告    | 视会话能力          | ✅ 一键保存最后一次 AI MD             |
 
 ## 登录态说明
 

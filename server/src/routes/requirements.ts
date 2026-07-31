@@ -52,7 +52,11 @@ function resolveSession(bodySession?: z.infer<typeof sessionSchema>) {
   }
 }
 
-function resolveLlm(bodyLlm?: { baseUrl?: string; apiKey?: string; model?: string }) {
+function resolveLlm(bodyLlm?: {
+  baseUrl?: string
+  apiKey?: string
+  model?: string
+}) {
   return {
     baseUrl: bodyLlm?.baseUrl || config.defaultLlm.baseUrl,
     apiKey: bodyLlm?.apiKey || config.defaultLlm.apiKey,
@@ -79,6 +83,7 @@ function beginSse(res: import('express').Response) {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
   res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
   res.flushHeaders?.()
 
   const abortController = new AbortController()
@@ -90,6 +95,7 @@ function beginSse(res: import('express').Response) {
     if (res.writableEnded) return
     res.write(`event: ${event.type}\n`)
     res.write(`data: ${JSON.stringify(event.data)}\n\n`)
+    res.flush?.()
   }
 
   return { abortController, writeEvent }
@@ -412,4 +418,3 @@ requirementsRouter.post('/requirements/test-cases/stream', async (req, res) => {
     if (!res.writableEnded) res.end()
   }
 })
-

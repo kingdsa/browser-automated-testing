@@ -28,10 +28,15 @@ function loadSettings(): AppSettings {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return structuredClone(defaultSettings)
     const parsed = JSON.parse(raw) as Partial<AppSettings>
+    const parsedLlm = parsed.llm
     return {
       ...structuredClone(defaultSettings),
       ...parsed,
-      llm: { ...defaultSettings.llm, ...parsed.llm },
+      llm: {
+        baseUrl: typeof parsedLlm?.baseUrl === 'string' ? parsedLlm.baseUrl : '',
+        apiKey: typeof parsedLlm?.apiKey === 'string' ? parsedLlm.apiKey : '',
+        model: typeof parsedLlm?.model === 'string' ? parsedLlm.model : 'gpt-4o-mini',
+      },
       session: { ...defaultSettings.session, ...parsed.session },
     }
   } catch {

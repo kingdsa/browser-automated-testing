@@ -95,7 +95,11 @@ export async function fetchDefaults() {
   const res = await fetch('/api/defaults')
   if (!res.ok) throw new Error('获取默认配置失败')
   return res.json() as Promise<{
-    llm: { baseUrl: string; model: string; hasApiKey: boolean }
+    llm: {
+      baseUrl: string
+      model: string
+      hasApiKey: boolean
+    }
     session: {
       maxSteps: number
       headless: boolean

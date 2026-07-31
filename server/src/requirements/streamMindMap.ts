@@ -95,7 +95,9 @@ export class StreamingMindMapParser {
     this.parser.onValue = (info) => {
       if (info.partial) return
       const key = String(info.key ?? '')
-      if (!['text', 'note', 'tag', 'expand', 'root'].includes(key)) return
+      if (!['text', 'note', 'tag', 'expand', 'children', 'root', 'title', 'summary'].includes(key)) {
+        return
+      }
 
       const document = findAnalysisDocument(info)
       if (!document) return
@@ -115,9 +117,11 @@ export class StreamingMindMapParser {
     let input = chunk
     if (!this.started) {
       this.prefix += chunk
-      const objectStart = this.prefix.indexOf('{')
+      // Ignore prose or reasoning that happens to contain braces. Start only when an
+      // object looks like the expected document shape; property names may span chunks.
+      const objectStart = this.prefix.search(/\{\s*"(?:root|title|summary)"\s*:/)
       if (objectStart === -1) {
-        if (this.prefix.length > 2048) this.failed = true
+        if (this.prefix.length > 65536) this.failed = true
         return
       }
       input = this.prefix.slice(objectStart)
