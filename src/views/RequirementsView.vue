@@ -7,6 +7,7 @@ import TestCasePanel from '@/components/requirements/TestCasePanel.vue'
 import {
   extractRequirementFile,
   streamAnalyzeRequirement,
+  streamGenerateMindMap,
   streamGenerateTestCases,
 } from '@/api/requirements'
 import { fetchBrowserTabs, fetchDefaults } from '@/api/agent'
@@ -452,7 +453,10 @@ async function runAnalyze() {
   )
 
   let gotResult = false
+  let reasoningSummary = ''
+  let extractedContent = ''
   try {
+    // 阶段一：分析文档，流式输出推理过程
     await streamAnalyzeRequirement({
       llm: llmPayload(),
       content: draftText.value,
@@ -470,6 +474,45 @@ async function runAnalyze() {
             appendAssistantDelta(String(payload.content || ''), 'reasoning')
             generationStatus.value = 'AI 正在分析需求...'
             statusText.value = generationStatus.value
+          } else if (type === 'result') {
+            reasoningSummary = String(payload.reasoningSummary || '')
+          } else if (type === 'meta') {
+            if (typeof payload.content === 'string') extractedContent = payload.content
+          } else if (type === 'error') {
+            generationError.value = String(payload.message || '分析失败')
+            errorText.value = generationError.value
+          }
+        },
+      },
+    })
+
+    if (generationError.value) {
+      finishAllAssistants()
+      return
+    }
+
+    // 阶段二：基于推理结果生成思维导图 JSON
+    const mindMapContent = extractedContent || draftText.value.trim()
+    if (!mindMapContent) {
+      generationError.value = '未获取到需求文档内容，无法生成思维导图'
+      errorText.value = generationError.value
+      finishAllAssistants()
+      return
+    }
+
+    await streamGenerateMindMap({
+      llm: llmPayload(),
+      content: mindMapContent,
+      fileName: sourceName,
+      reasoning: reasoningSummary,
+      handlers: {
+        signal: generationAbort?.signal,
+        onEvent(type, data) {
+          const payload = (data || {}) as Record<string, unknown>
+          if (type === 'status') {
+            const message = String(payload.message || '')
+            generationStatus.value = message
+            statusText.value = message
           } else if (type === 'delta') {
             const reasoning = currentAssistant('reasoning')
             if (reasoning) reasoning.streaming = false
@@ -496,7 +539,7 @@ async function runAnalyze() {
             generationStatus.value = `分析完成：识别到 ${result.featureCount} 个功能点`
             statusText.value = generationStatus.value
           } else if (type === 'error') {
-            generationError.value = String(payload.message || '分析失败')
+            generationError.value = String(payload.message || '生成思维导图失败')
             errorText.value = generationError.value
           }
         },

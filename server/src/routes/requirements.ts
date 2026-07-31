@@ -2,7 +2,7 @@ import { Router } from 'express'
 import multer from 'multer'
 import { z } from 'zod'
 import { config } from '../config.js'
-import { analyzeRequirementDocument, streamAnalyzeRequirementDocument } from '../requirements/analyze.js'
+import { analyzeRequirementDocument, streamAnalyzeRequirementDocument, streamGenerateMindMap } from '../requirements/analyze.js'
 import { extractRequirementText } from '../requirements/extractText.js'
 import { generateTestCasesFromFeatures, streamGenerateTestCasesFromFeatures } from '../requirements/generateTestCases.js'
 
@@ -79,6 +79,7 @@ function beginSse(res: import('express').Response) {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
   res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
   res.flushHeaders?.()
 
   const abortController = new AbortController()
@@ -90,6 +91,7 @@ function beginSse(res: import('express').Response) {
     if (res.writableEnded) return
     res.write(`event: ${event.type}\n`)
     res.write(`data: ${JSON.stringify(event.data)}\n\n`)
+    res.flush?.()
   }
 
   return { abortController, writeEvent }
@@ -275,12 +277,69 @@ requirementsRouter.post('/requirements/analyze/stream', upload.single('file'), a
       onEvent: (event) => writeEvent(event),
     })
 
-    // Ensure result payload also includes source metadata for the client.
+    // 返回提取后的正文与推理摘要，供第二阶段 mindmap/stream 使用。
     writeEvent({
       type: 'meta',
       data: {
         ok: true,
         source,
+        fileName,
+        content,
+        contentLength: content.length,
+        reasoningSummary: result.reasoningSummary,
+      },
+    })
+  } catch (error) {
+    if (abortController.signal.aborted || (error as Error)?.name === 'AbortError' || (error as Error)?.name === 'APIUserAbortError') {
+      writeEvent({ type: 'status', data: { message: '已取消生成' } })
+      writeEvent({ type: 'done', data: { cancelled: true } })
+    } else {
+      const message = error instanceof Error ? error.message : String(error)
+      writeEvent({ type: 'error', data: { message } })
+      writeEvent({ type: 'done', data: {} })
+    }
+  } finally {
+    if (!res.writableEnded) res.end()
+  }
+})
+
+requirementsRouter.post('/requirements/mindmap/stream', async (req, res) => {
+  const { abortController, writeEvent } = beginSse(res)
+  try {
+    const bodyLlm = parseMaybeJsonObject(req.body?.llm)
+    const llmParsed = llmSchema.safeParse(bodyLlm)
+    if (!llmParsed.success) {
+      writeEvent({ type: 'error', data: { message: 'llm 参数无效' } })
+      writeEvent({ type: 'done', data: {} })
+      res.end()
+      return
+    }
+
+    const llm = resolveLlm(llmParsed.data)
+    const content = typeof req.body?.content === 'string' ? req.body.content.trim() : ''
+    const fileName = typeof req.body?.fileName === 'string' ? req.body.fileName.trim() : 'requirement.md'
+    const reasoning = typeof req.body?.reasoning === 'string' ? req.body.reasoning : ''
+
+    if (!content) {
+      writeEvent({ type: 'error', data: { message: '请提供需求文档内容（content）' } })
+      writeEvent({ type: 'done', data: {} })
+      res.end()
+      return
+    }
+
+    const result = await streamGenerateMindMap({
+      llm,
+      content,
+      fileName,
+      reasoning,
+      signal: abortController.signal,
+      onEvent: (event) => writeEvent(event),
+    })
+
+    writeEvent({
+      type: 'meta',
+      data: {
+        ok: true,
         fileName,
         contentLength: content.length,
         featureCount: result.featureCount,

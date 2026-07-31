@@ -27,6 +27,9 @@ app.get('/', (_req, res) => {
       '/api/requirements/analyze',
       '/api/requirements/extract',
       '/api/requirements/test-cases',
+      '/api/requirements/analyze/stream',
+      '/api/requirements/mindmap/stream',
+      '/api/requirements/test-cases/stream',
       '/screenshots/*',
     ],
   })

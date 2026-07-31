@@ -103,6 +103,28 @@ export async function streamAnalyzeRequirement(input: {
   await consumeSseStream(response, input.handlers)
 }
 
+export async function streamGenerateMindMap(input: {
+  llm: LlmSettings
+  content: string
+  fileName?: string
+  reasoning?: string
+  handlers: StreamHandlers
+}): Promise<void> {
+  const response = await fetch('/api/requirements/mindmap/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      llm: input.llm,
+      content: input.content,
+      fileName: input.fileName || '',
+      reasoning: input.reasoning || '',
+    }),
+    signal: input.handlers.signal,
+  })
+
+  await consumeSseStream(response, input.handlers)
+}
+
 export async function extractRequirementFile(file: File): Promise<{
   ok: boolean
   fileName: string
