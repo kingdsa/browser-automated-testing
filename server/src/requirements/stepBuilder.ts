@@ -156,17 +156,37 @@ export function pickPathForFeature(feature: FeaturePoint, paths: string[][]): st
   return bestScore > 0 ? best : paths[0] || null
 }
 
+export interface NormalizeCasesOptions {
+  /** Steps Jev flagged as not concrete; treated exactly like regex-detected vague steps. */
+  vagueSteps?: string[]
+  /** Indexes of verified paths that failed Jev's concreteness check. */
+  excludedPathIndexes?: number[]
+}
+
+export function filterExcludedPaths(
+  paths: string[][],
+  excludedPathIndexes?: number[],
+): string[][] {
+  if (!excludedPathIndexes?.length) return paths
+  const excluded = new Set(excludedPathIndexes)
+  return paths.filter((_path, index) => !excluded.has(index))
+}
+
 export function buildConcreteSteps(
   feature: FeaturePoint,
   options?: {
     pageHint?: string
     exploration?: PageExplorationLite | null
     kind?: 'main' | 'negative'
+    excludedPathIndexes?: number[]
   },
 ): string[] {
   const kind = options?.kind || 'main'
   const pageHint = options?.pageHint
-  const verified = extractVerifiedPaths(options?.exploration?.notes)
+  const verified = filterExcludedPaths(
+    extractVerifiedPaths(options?.exploration?.notes),
+    options?.excludedPathIndexes,
+  )
   const matchedPath = pickPathForFeature(feature, verified)
 
   if (matchedPath?.length) {
@@ -212,15 +232,23 @@ export function normalizeCases(
   cases: TestCaseLite[],
   features: FeaturePoint[],
   exploration?: PageExplorationLite | null,
+  options?: NormalizeCasesOptions,
 ): TestCaseLite[] {
   const featureByText = new Map(features.map((item) => [item.text, item]))
-  const verifiedPaths = extractVerifiedPaths(exploration?.notes)
+  const verifiedPaths = filterExcludedPaths(
+    extractVerifiedPaths(exploration?.notes),
+    options?.excludedPathIndexes,
+  )
+  const jevVagueSteps = new Set(
+    (options?.vagueSteps || []).map((step) => step.trim()).filter(Boolean),
+  )
+  const isStepVague = (step: string) => isVagueStep(step) || jevVagueSteps.has(step.trim())
 
   return cases.map((item, index) => {
     const matched = featureByText.get(item.feature)
     const featurePath = item.featurePath?.trim() || matched?.path || item.feature
     let steps = normalizeStepList(item.steps)
-    const vagueRatio = steps.length ? steps.filter(isVagueStep).length / steps.length : 1
+    const vagueRatio = steps.length ? steps.filter(isStepVague).length / steps.length : 1
     const tooFewSteps = steps.length < 3
 
     if (!steps.length || vagueRatio >= 0.4 || tooFewSteps) {
@@ -234,13 +262,14 @@ export function normalizeCases(
         pageHint: exploration?.targetUrl || exploration?.visitedUrls?.[0],
         exploration,
         kind,
+        excludedPathIndexes: options?.excludedPathIndexes,
       })
       // Prefer model steps that are already concrete; only replace vague ones.
       if (!steps.length || vagueRatio >= 0.5) {
         steps = rebuilt
       } else {
         steps = steps.flatMap((step, stepIndex) => {
-          if (!isVagueStep(step)) return [step]
+          if (!isStepVague(step)) return [step]
           return rebuilt[Math.min(stepIndex, rebuilt.length - 1)] ? [rebuilt[Math.min(stepIndex, rebuilt.length - 1)]] : []
         })
         if (steps.length < 3) steps = rebuilt

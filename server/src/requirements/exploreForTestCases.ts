@@ -3,11 +3,21 @@ import { config } from '../config.js'
 import { BrowserSession } from '../browser/session.js'
 import { browserToolDefinitions, executeBrowserTool } from '../browser/tools.js'
 import { loadSkills } from '../skills/loader.js'
+import { createJevClient } from '../jev/client.js'
+import {
+  JEV_POLICY,
+  assessAgentStep,
+  triageLogEntries,
+  type FastPathTool,
+  type SnapshotLite,
+} from '../jev/decisions.js'
 import type {
   ChatMessage,
+  JevSettings,
   LlmSettings,
   SessionConfig,
   ToolCall,
+  ToolResult,
 } from '../types/index.js'
 
 interface FeaturePoint {
@@ -103,6 +113,23 @@ function createAbortError(message = '已取消生成') {
   const error = new Error(message)
   error.name = 'AbortError'
   return error
+}
+
+function fastPathArguments(name: FastPathTool): Record<string, unknown> {
+  switch (name) {
+    case 'scroll_page':
+      return { direction: 'down' }
+    case 'wait_for':
+      return { ms: 1000 }
+    case 'get_network_logs':
+      return { limit: 40, onlyFailed: false }
+    case 'get_console_logs':
+      return { limit: 40, onlyErrors: true }
+    case 'take_screenshot':
+      return { fullPage: false }
+    default:
+      return {}
+  }
 }
 
 function isAbortError(error: unknown, signal?: AbortSignal) {
@@ -227,6 +254,7 @@ function extractVisitedUrls(toolName: string, resultData: unknown, acc: Set<stri
  */
 export async function explorePageForTestCases(input: {
   llm: LlmSettings
+  jev?: JevSettings
   title?: string
   summary?: string
   features: FeaturePoint[]
@@ -307,6 +335,78 @@ export async function explorePageForTestCases(input: {
   const toolSummaries: string[] = []
   let stepCount = 0
   let finalNotes = ''
+
+  const jevClient = createJevClient(input.jev, {
+    signal,
+    onNote: (message) => emit({ type: 'status', data: { message } }),
+  })
+  if (jevClient.active) {
+    emit({
+      type: 'status',
+      data: { message: `Jev（${jevClient.model}）已启用：探索中的只读观察走快路径` },
+    })
+  }
+  const featureGoal = features.map((item) => item.path).join('\n').slice(0, 2000)
+  let lastSnapshot: SnapshotLite | null = null
+  const currentSnapshot = (): SnapshotLite | null => lastSnapshot
+  let consoleErrors: string[] = []
+  let failedRequests: string[] = []
+  let pendingFastPath: { name: FastPathTool; confidence: number } | null = null
+  let consecutiveFastPath = 0
+  let enoughEvidenceAnnounced = false
+
+  const rememberToolResult = (name: string, result: ToolResult) => {
+    const data = (result.data && typeof result.data === 'object' ? result.data : null) as
+      | Record<string, unknown>
+      | null
+    if (!data) return
+    if (name === 'get_page_snapshot') {
+      lastSnapshot = data as SnapshotLite
+    } else if (name === 'get_console_logs') {
+      const items = Array.isArray(data.items) ? data.items : []
+      consoleErrors = items
+        .map((item) => (item && typeof item === 'object' ? (item as Record<string, unknown>) : null))
+        .filter((item): item is Record<string, unknown> => Boolean(item))
+        .filter((item) => ['error', 'warning', 'pageerror'].includes(String(item.type || '')))
+        .map((item) => `${String(item.type || 'log')}: ${String(item.text || '')}`)
+    } else if (name === 'get_network_logs') {
+      const items = Array.isArray(data.items) ? data.items : []
+      failedRequests = items
+        .map((item) => (item && typeof item === 'object' ? (item as Record<string, unknown>) : null))
+        .filter((item): item is Record<string, unknown> => Boolean(item))
+        .filter((item) => item.ok === false || Number(item.status) >= 400 || Boolean(item.failure))
+        .map((item) => `${String(item.method || 'GET')} ${String(item.status ?? 'failed')} ${String(item.url || '')}`)
+    }
+  }
+
+  const buildToolHistoryPayload = async (name: string, result: ToolResult): Promise<string> => {
+    const fallback = JSON.stringify({ ok: result.ok, summary: result.summary, data: result.data })
+    if (!jevClient.active) return fallback
+    try {
+      if (name === 'get_console_logs' || name === 'get_network_logs') {
+        const kind = name === 'get_console_logs' ? 'console' : 'network'
+        const triage = await triageLogEntries(
+          jevClient,
+          kind,
+          kind === 'console' ? consoleErrors : failedRequests,
+        )
+        if (triage) {
+          return JSON.stringify({
+            ok: result.ok,
+            summary: result.summary,
+            jev_triage: {
+              kept_entries: triage.flagged,
+              filtered_benign_entries: triage.dropped,
+              severity: triage.severity,
+            },
+          })
+        }
+      }
+    } catch {
+      // ignore triage failures
+    }
+    return fallback
+  }
 
   try {
     emit({
@@ -411,55 +511,81 @@ export async function explorePageForTestCases(input: {
       if (signal?.aborted) throw createAbortError()
       stepCount = step
       const stepLabel = unlimited ? `${step}` : `${step}/${configuredMaxSteps}`
-      emit({
-        type: 'status',
-        data: { message: `页面探索中（第 ${stepLabel} 步）…` },
-      })
-
-      const stream = await client.chat.completions.create(
-        {
-          model: llm.model,
-          messages: toOpenAiMessages(history),
-          tools: browserToolDefinitions,
-          tool_choice: 'auto',
-          stream: true,
-          temperature: 0.2,
-        },
-        { signal },
-      )
-
       let assistantText = ''
-      const toolCallMap = new Map<number, ToolCall>()
+      let toolCalls: ToolCall[] = []
 
-      for await (const chunk of stream) {
-        if (signal?.aborted) throw createAbortError()
-        const choice = chunk.choices?.[0]
-        if (!choice) continue
-        const delta = choice.delta
-        if (delta?.content) {
-          assistantText += delta.content
-          emit({ type: 'delta', data: { content: delta.content } })
-        }
-        if (delta?.tool_calls) {
-          for (const part of delta.tool_calls) {
-            const index = part.index ?? 0
-            const existing = toolCallMap.get(index) || {
-              id: part.id || `call_${index}_${Date.now()}`,
-              type: 'function' as const,
-              function: { name: '', arguments: '' },
+      if (pendingFastPath && consecutiveFastPath < JEV_POLICY.maxConsecutiveFastPath) {
+        const fastPath = pendingFastPath
+        pendingFastPath = null
+        consecutiveFastPath += 1
+        toolCalls = [
+          {
+            id: `call_jev_${step}_${Date.now()}`,
+            type: 'function',
+            function: {
+              name: fastPath.name,
+              arguments: JSON.stringify(fastPathArguments(fastPath.name)),
+            },
+          },
+        ]
+        emit({
+          type: 'status',
+          data: {
+            message: `Jev 快路径：直接执行 ${fastPath.name}（置信度 ${fastPath.confidence.toFixed(2)}），跳过本次 LLM 调用`,
+          },
+        })
+      } else {
+        pendingFastPath = null
+        consecutiveFastPath = 0
+        emit({
+          type: 'status',
+          data: { message: `页面探索中（第 ${stepLabel} 步）…` },
+        })
+
+        const stream = await client.chat.completions.create(
+          {
+            model: llm.model,
+            messages: toOpenAiMessages(history),
+            tools: browserToolDefinitions,
+            tool_choice: 'auto',
+            stream: true,
+            temperature: 0.2,
+          },
+          { signal },
+        )
+
+        const toolCallMap = new Map<number, ToolCall>()
+
+        for await (const chunk of stream) {
+          if (signal?.aborted) throw createAbortError()
+          const choice = chunk.choices?.[0]
+          if (!choice) continue
+          const delta = choice.delta
+          if (delta?.content) {
+            assistantText += delta.content
+            emit({ type: 'delta', data: { content: delta.content } })
+          }
+          if (delta?.tool_calls) {
+            for (const part of delta.tool_calls) {
+              const index = part.index ?? 0
+              const existing = toolCallMap.get(index) || {
+                id: part.id || `call_${index}_${Date.now()}`,
+                type: 'function' as const,
+                function: { name: '', arguments: '' },
+              }
+              if (part.id) existing.id = part.id
+              if (part.function?.name) existing.function.name += part.function.name
+              if (part.function?.arguments) existing.function.arguments += part.function.arguments
+              toolCallMap.set(index, existing)
             }
-            if (part.id) existing.id = part.id
-            if (part.function?.name) existing.function.name += part.function.name
-            if (part.function?.arguments) existing.function.arguments += part.function.arguments
-            toolCallMap.set(index, existing)
           }
         }
-      }
 
-      const toolCalls = [...toolCallMap.entries()]
-        .sort((a, b) => a[0] - b[0])
-        .map(([, call]) => call)
-        .filter((call) => call.function.name)
+        toolCalls = [...toolCallMap.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([, call]) => call)
+          .filter((call) => call.function.name)
+      }
 
       history.push({
         role: 'assistant',
@@ -474,6 +600,7 @@ export async function explorePageForTestCases(input: {
         break
       }
 
+      let anyToolFailure = false
       for (const call of toolCalls) {
         if (signal?.aborted) throw createAbortError()
         emit({
@@ -486,8 +613,10 @@ export async function explorePageForTestCases(input: {
         })
 
         const result = await executeBrowserTool(browser, call.function.name, call.function.arguments)
+        if (!result.ok) anyToolFailure = true
         toolSummaries.push(`${call.function.name}: ${result.summary}`)
         if (result.data) extractVisitedUrls(call.function.name, result.data, visitedUrls)
+        rememberToolResult(call.function.name, result)
 
         emit({
           type: 'tool_result',
@@ -506,12 +635,44 @@ export async function explorePageForTestCases(input: {
         history.push({
           role: 'tool',
           tool_call_id: call.id,
-          content: JSON.stringify({
-            ok: result.ok,
-            summary: result.summary,
-            data: result.data,
-          }),
+          content: await buildToolHistoryPayload(call.function.name, result),
         })
+      }
+
+      if (jevClient.active && !signal?.aborted) {
+        const assessment = await assessAgentStep(jevClient, {
+          goal: `为测试用例生成做页面探索，需覆盖以下功能点：\n${featureGoal}`,
+          targetUrl: targetUrl || currentSnapshot()?.url,
+          assistantIntent: assistantText,
+          recentToolSummaries: toolSummaries,
+          snapshot: currentSnapshot(),
+          consoleErrors,
+          failedRequests,
+        })
+        if (assessment) {
+          if (assessment.enoughEvidence && !enoughEvidenceAnnounced) {
+            enoughEvidenceAnnounced = true
+            history.push({
+              role: 'system',
+              content: `Jev 判定：页面探索信息已足够覆盖目标功能点（noul=${assessment.enoughEvidenceNoul.toFixed(2)}）。如无必须的进一步验证，请停止调用工具并输出完整探索笔记。`,
+            })
+            emit({
+              type: 'status',
+              data: { message: `Jev 判定探索已足够（noul=${assessment.enoughEvidenceNoul.toFixed(2)}），建议收尾` },
+            })
+          }
+          pendingFastPath = anyToolFailure ? null : assessment.nextTool
+          if (pendingFastPath) {
+            emit({
+              type: 'status',
+              data: {
+                message: `Jev 预判下一步：${pendingFastPath.name}（置信度 ${pendingFastPath.confidence.toFixed(2)}）`,
+              },
+            })
+          }
+        } else {
+          pendingFastPath = null
+        }
       }
     }
 

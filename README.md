@@ -16,6 +16,7 @@ AI 驱动的前端质量工具箱（**BAT / Signal Lab**）：从 **需求文档
 ### 公共能力
 
 - 对接第三方中转站（OpenAI 兼容：`base_url` + `api_key` + `model`）
+- 可选接入 **TypeSafe Jev**（System One 决策模型）：只读观察快路径、日志分诊、步骤/路径/覆盖度校验、报告审计；未配置 Key 时自动回退原有流程
 - 配置可写在页面左侧，也可由服务端 `.env` 预填
 - 深色精密控制台 UI（Signal Lab 设计语言）
 - 页面切换 `keep-alive`，需求分析 / 浏览器测试状态互不丢失
@@ -97,6 +98,18 @@ npm run dev
 | `npm run server`     | 仅启动 Agent 服务                         |
 | `npm run build`      | 构建前端                                  |
 | `npm run type-check` | TypeScript 检查                           |
+
+### 可选：Jev 决策加速（TypeSafe System One）
+
+在需求分析页或浏览器测试页左侧展开「Jev 决策加速」，勾选启用并手动填入 API Key（也可在 `.env` 配 `TYPESAFE_API_KEY` 让前端留空）。LLM 继续负责生成文字，Jev 负责判断与路由：
+
+- **快路径**：只读观察步骤（snapshot / console / network / screenshot…）由 Jev 直接决策执行，跳过该步 LLM 调用；置信度不足或需要点击/输入/跳转时自动升级回 LLM
+- **日志分诊**：console / network 日志先经 Jev 批量判定是否为缺陷证据，只把疑似缺陷条目喂给 LLM（界面仍显示完整原始数据）
+- **生成校验**：用例步骤具体性、用例与功能点归属、探索路径可用性、需求章节覆盖度
+- **安全护栏**：上传文档 / 用户消息的提示注入检测
+- **报告审计**：最终报告与工具观测证据的一致性检查（SSE `report_audit`）
+
+未配置 API Key 或请求失败时，全部逻辑自动回退到原有流程，不影响离线可用性。
 
 ## 使用方式
 

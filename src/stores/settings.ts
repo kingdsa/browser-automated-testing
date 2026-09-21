@@ -11,6 +11,12 @@ const defaultSettings: AppSettings = {
     apiKey: '',
     model: 'gpt-4o-mini',
   },
+  jev: {
+    enabled: false,
+    baseUrl: 'https://api.typesafe.ai/v1',
+    apiKey: '',
+    model: 'jev-latest',
+  },
   session: {
     targetUrl: '',
     headless: false,
@@ -29,6 +35,7 @@ function loadSettings(): AppSettings {
     if (!raw) return structuredClone(defaultSettings)
     const parsed = JSON.parse(raw) as Partial<AppSettings>
     const parsedLlm = parsed.llm
+    const parsedJev = parsed.jev
     return {
       ...structuredClone(defaultSettings),
       ...parsed,
@@ -36,6 +43,18 @@ function loadSettings(): AppSettings {
         baseUrl: typeof parsedLlm?.baseUrl === 'string' ? parsedLlm.baseUrl : '',
         apiKey: typeof parsedLlm?.apiKey === 'string' ? parsedLlm.apiKey : '',
         model: typeof parsedLlm?.model === 'string' ? parsedLlm.model : 'gpt-4o-mini',
+      },
+      jev: {
+        enabled: typeof parsedJev?.enabled === 'boolean' ? parsedJev.enabled : false,
+        baseUrl:
+          typeof parsedJev?.baseUrl === 'string' && parsedJev.baseUrl
+            ? parsedJev.baseUrl
+            : defaultSettings.jev.baseUrl,
+        apiKey: typeof parsedJev?.apiKey === 'string' ? parsedJev.apiKey : '',
+        model:
+          typeof parsedJev?.model === 'string' && parsedJev.model
+            ? parsedJev.model
+            : defaultSettings.jev.model,
       },
       session: { ...defaultSettings.session, ...parsed.session },
     }
@@ -79,6 +98,14 @@ export const useSettingsStore = defineStore('settings', () => {
       // Prefer server-side headless default on first visit / bare settings.
       if (!rawHasSessionHeadless() && typeof defaults.session.headless === 'boolean') {
         settings.value.session.headless = defaults.session.headless
+      }
+      if (settings.value.jev) {
+        if (!settings.value.jev.baseUrl && defaults.jev?.baseUrl) {
+          settings.value.jev.baseUrl = defaults.jev.baseUrl
+        }
+        if (!settings.value.jev.model && defaults.jev?.model) {
+          settings.value.jev.model = defaults.jev.model
+        }
       }
     } catch {
       // ignore offline backend during first paint

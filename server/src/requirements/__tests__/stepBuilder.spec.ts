@@ -179,4 +179,51 @@ describe('normalizeCases', () => {
     expect(cases[0].steps).toContain('选择左侧菜单「用户管理」')
     expect(cases[0].steps).toContain('在确认弹窗点击「确定」')
   })
+
+  it('rebuilds steps Jev flagged as vague even without regex matches', () => {
+    const steps = [
+      '对用户记录执行目标动作',
+      '处理该对象的后续状态',
+      '核对界面上的最终变化',
+    ]
+    const lean = normalizeCases(
+      [{ feature: '删除用户', title: '删除用户 - 正常', type: '功能', steps, expected: '删除成功' }],
+      features,
+    )
+    // Without Jev, the regex heuristics keep these steps untouched.
+    expect(lean[0].steps).toEqual(steps)
+
+    const enriched = normalizeCases(
+      [{ feature: '删除用户', title: '删除用户 - 正常', type: '功能', steps, expected: '删除成功' }],
+      features,
+      null,
+      { vagueSteps: steps },
+    )
+    expect(enriched[0].steps.some((step) => /菜单|点击|确认/.test(step))).toBe(true)
+  })
+
+  it('ignores verified paths excluded by Jev', () => {
+    const notes = [
+      '### 已验证路径',
+      '- 路径 1：删除用户',
+      '  1. 选择左侧菜单「用户管理」',
+      '  2. 点击右上角「删除」',
+      '  3. 在确认弹窗点击「确定」',
+    ].join('\n')
+
+    const used = normalizeCases(
+      [{ feature: '删除用户', title: '删除用户 - 正常', type: '功能', steps: ['打开页面'], expected: '删除成功' }],
+      features,
+      { notes },
+    )
+    expect(used[0].steps).toContain('选择左侧菜单「用户管理」')
+
+    const excluded = normalizeCases(
+      [{ feature: '删除用户', title: '删除用户 - 正常', type: '功能', steps: ['打开页面'], expected: '删除成功' }],
+      features,
+      { notes },
+      { excludedPathIndexes: [0] },
+    )
+    expect(excluded[0].steps).not.toContain('选择左侧菜单「用户管理」')
+  })
 })

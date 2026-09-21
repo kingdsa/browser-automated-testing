@@ -4,6 +4,17 @@ import { runAgent } from '../agent/runner.js'
 import { config } from '../config.js'
 import { loadSkills } from '../skills/loader.js'
 import { BrowserSession } from '../browser/session.js'
+import { createJevClient } from '../jev/client.js'
+import { screenPromptInjection } from '../jev/decisions.js'
+
+const jevBodySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    baseUrl: z.string().optional(),
+    apiKey: z.string().optional(),
+    model: z.string().optional(),
+  })
+  .optional()
 
 const chatBodySchema = z.object({
   messages: z
@@ -21,6 +32,7 @@ const chatBodySchema = z.object({
       model: z.string().optional(),
     })
     .optional(),
+  jev: jevBodySchema,
   session: z
     .object({
       targetUrl: z.string().url().optional().or(z.literal('')),
@@ -48,6 +60,11 @@ chatRouter.get('/defaults', (_req, res) => {
       baseUrl: config.defaultLlm.baseUrl,
       model: config.defaultLlm.model,
       hasApiKey: Boolean(config.defaultLlm.apiKey),
+    },
+    jev: {
+      baseUrl: config.defaultJev.baseUrl,
+      model: config.defaultJev.model,
+      hasApiKey: Boolean(config.defaultJev.apiKey),
     },
     session: {
       maxSteps: config.defaultMaxSteps,
@@ -103,6 +120,12 @@ chatRouter.post('/chat', async (req, res) => {
     apiKey: body.llm?.apiKey || config.defaultLlm.apiKey,
     model: body.llm?.model || config.defaultLlm.model,
   }
+  const jev = {
+    enabled: body.jev?.enabled,
+    baseUrl: body.jev?.baseUrl || config.defaultJev.baseUrl,
+    apiKey: body.jev?.apiKey || config.defaultJev.apiKey,
+    model: body.jev?.model || config.defaultJev.model,
+  }
 
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
@@ -121,9 +144,33 @@ chatRouter.post('/chat', async (req, res) => {
   }
 
   try {
+    let injectionFlagged = false
+    try {
+      const jevClient = createJevClient(jev, { signal: abortController.signal })
+      if (jevClient.active) {
+        const lastUser = [...body.messages].reverse().find((message) => message.role === 'user')
+        if (lastUser?.content) {
+          const screen = await screenPromptInjection(jevClient, lastUser.content)
+          if (screen?.flagged) {
+            injectionFlagged = true
+            writeEvent({
+              type: 'status',
+              data: {
+                message: `Jev 护栏：用户消息疑似提示注入（noul=${screen.noul.toFixed(2)}），已按被测数据处理`,
+              },
+            })
+          }
+        }
+      }
+    } catch {
+      // guardrail is best-effort; never block the run on its failure
+    }
+
     await runAgent({
       messages: body.messages,
       llm,
+      jev,
+      guardrails: { injectionFlagged },
       session: {
         targetUrl: body.session?.targetUrl || undefined,
         headless: body.session?.headless,

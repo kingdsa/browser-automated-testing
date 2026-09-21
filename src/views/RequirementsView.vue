@@ -32,6 +32,7 @@ defineOptions({ name: 'RequirementsView' })
 
 const settings = useSettingsStore()
 const serverHasKey = ref(false)
+const serverHasJevKey = ref(false)
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const mindMapJsonInputRef = ref<HTMLInputElement | null>(null)
@@ -124,6 +125,7 @@ onMounted(async () => {
   try {
     const defaults = await fetchDefaults()
     serverHasKey.value = defaults.llm.hasApiKey
+    serverHasJevKey.value = Boolean(defaults.jev?.hasApiKey)
     await settings.hydrateFromServer()
     // Prefill from browser-test session settings when available.
     if (settings.settings.session.targetUrl) {
@@ -378,6 +380,17 @@ function llmPayload() {
   }
 }
 
+function jevPayload() {
+  const jev = settings.settings.jev
+  if (!jev) return undefined
+  return {
+    enabled: jev.enabled,
+    baseUrl: jev.baseUrl,
+    apiKey: jev.apiKey,
+    model: jev.model,
+  }
+}
+
 function caseSessionPayload() {
   const targetUrl = caseTargetUrl.value.trim()
   // Only ground in a real page when user provided URL or explicitly chose attach mode.
@@ -617,6 +630,7 @@ async function runAnalyze() {
     // 阶段一：分析文档，流式输出推理过程
     await streamAnalyzeRequirement({
       llm: llmPayload(),
+      jev: jevPayload(),
       content: draftText.value,
       fileName: sourceName,
       file: selectedFile.value,
@@ -670,6 +684,7 @@ async function runAnalyze() {
 
     await streamGenerateMindMap({
       llm: llmPayload(),
+      jev: jevPayload(),
       content: mindMapContent,
       fileName: sourceName,
       reasoning: reasoningSummary,
@@ -788,6 +803,7 @@ async function runGenerateTestCases() {
   try {
     await streamGenerateTestCases({
       llm: llmPayload(),
+      jev: jevPayload(),
       title: title.value,
       summary: summary.value,
       root: rootSnapshot,
@@ -1170,6 +1186,40 @@ async function onTestCaseJsonFileChange(event: Event) {
               <input v-model="settings.settings.llm.apiKey" type="password" placeholder="sk-..." />
             </label>
           </div>
+          <details class="jev-config">
+            <summary>
+              Jev 决策加速（可选）
+              <span class="jev-config__state">{{
+                settings.settings.jev.enabled
+                  ? settings.settings.jev.apiKey || serverHasJevKey
+                    ? '已启用'
+                    : '缺 API Key'
+                  : '未启用'
+              }}</span>
+            </summary>
+            <label class="inline">
+              <input v-model="settings.settings.jev.enabled" type="checkbox" />
+              <span>启用 Jev（TypeSafe System One）：快路径 / 分诊 / 校验 / 审计</span>
+            </label>
+            <div class="llm-row">
+              <label>
+                <span>Jev API Key {{ serverHasJevKey ? '（可留空，使用服务端 .env）' : '' }}</span>
+                <input
+                  v-model="settings.settings.jev.apiKey"
+                  type="password"
+                  placeholder="ts-... 手动输入"
+                  autocomplete="off"
+                />
+              </label>
+              <label>
+                <span>Jev 模型</span>
+                <input v-model="settings.settings.jev.model" placeholder="jev-latest" />
+              </label>
+            </div>
+            <p class="hint">
+              只读观察走本地快路径、日志结果自动分诊、步骤/路径具体性校验、报告审计；不填 Key 时自动回退现有流程。
+            </p>
+          </details>
           <SkillsPanel
             category="function-point"
             title="功能点 Skills（可多选拼接）"
@@ -1841,6 +1891,90 @@ select:focus {
   flex-direction: column;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.jev-config {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-soft);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.jev-config > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.jev-config > summary::-webkit-details-marker {
+  display: none;
+}
+
+.jev-config__state {
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.jev-config[open] .jev-config__state {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--accent-soft);
+}
+
+.jev-config label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.jev-config label.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text);
+}
+
+.jev-config label.inline input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.jev-config label.inline span {
+  flex: 1 1 auto;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.jev-config .llm-row {
+  margin-bottom: 0;
 }
 
 .case-target {

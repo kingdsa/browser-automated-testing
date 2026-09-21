@@ -23,6 +23,14 @@ export interface LlmSettings {
   model: string
 }
 
+/** TypeSafe Jev（System One）typed-decision settings. Missing apiKey disables Jev. */
+export interface JevSettings {
+  enabled?: boolean
+  baseUrl?: string
+  apiKey?: string
+  model?: string
+}
+
 export type BrowserMode = 'auto' | 'launch' | 'attach'
 
 export interface SessionConfig {
@@ -47,6 +55,7 @@ export type StreamEventType =
   | 'tool_start'
   | 'tool_result'
   | 'status'
+  | 'report_audit'
   | 'done'
   | 'error'
 

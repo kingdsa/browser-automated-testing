@@ -1,4 +1,4 @@
-import type { LlmSettings } from '@/types/chat'
+import type { JevSettings, LlmSettings } from '@/types/chat'
 import type {
   FeaturePoint,
   GenerateTestCasesResult,
@@ -59,12 +59,14 @@ async function consumeSseStream(response: Response, handlers: StreamHandlers) {
 
 export async function analyzeRequirement(input: {
   llm: LlmSettings
+  jev?: JevSettings
   content?: string
   fileName?: string
   file?: File | null
 }): Promise<RequirementAnalysisResult> {
   const form = new FormData()
   form.append('llm', JSON.stringify(input.llm))
+  if (input.jev) form.append('jev', JSON.stringify(input.jev))
   if (input.content?.trim()) form.append('content', input.content)
   if (input.fileName?.trim()) form.append('fileName', input.fileName)
   if (input.file) form.append('file', input.file)
@@ -83,6 +85,7 @@ export async function analyzeRequirement(input: {
 
 export async function streamAnalyzeRequirement(input: {
   llm: LlmSettings
+  jev?: JevSettings
   content?: string
   fileName?: string
   file?: File | null
@@ -90,6 +93,7 @@ export async function streamAnalyzeRequirement(input: {
 }): Promise<void> {
   const form = new FormData()
   form.append('llm', JSON.stringify(input.llm))
+  if (input.jev) form.append('jev', JSON.stringify(input.jev))
   if (input.content?.trim()) form.append('content', input.content)
   if (input.fileName?.trim()) form.append('fileName', input.fileName)
   if (input.file) form.append('file', input.file)
@@ -105,6 +109,7 @@ export async function streamAnalyzeRequirement(input: {
 
 export async function streamGenerateMindMap(input: {
   llm: LlmSettings
+  jev?: JevSettings
   content: string
   fileName?: string
   reasoning?: string
@@ -115,6 +120,7 @@ export async function streamGenerateMindMap(input: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       llm: input.llm,
+      jev: input.jev,
       content: input.content,
       fileName: input.fileName || '',
       reasoning: input.reasoning || '',
@@ -157,6 +163,7 @@ export interface TestCaseSessionConfig {
 
 export async function generateTestCases(input: {
   llm: LlmSettings
+  jev?: JevSettings
   title?: string
   summary?: string
   root?: MindMapNode | null
@@ -168,6 +175,7 @@ export async function generateTestCases(input: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       llm: input.llm,
+      jev: input.jev,
       title: input.title,
       summary: input.summary,
       root: input.root,
@@ -185,6 +193,7 @@ export async function generateTestCases(input: {
 
 export async function streamGenerateTestCases(input: {
   llm: LlmSettings
+  jev?: JevSettings
   title?: string
   summary?: string
   root?: MindMapNode | null
@@ -197,6 +206,7 @@ export async function streamGenerateTestCases(input: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       llm: input.llm,
+      jev: input.jev,
       title: input.title,
       summary: input.summary,
       root: input.root,

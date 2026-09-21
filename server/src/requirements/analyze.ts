@@ -1,6 +1,6 @@
 import OpenAI from 'openai'
 import { config } from '../config.js'
-import type { LlmSettings } from '../types/index.js'
+import type { JevSettings, LlmSettings } from '../types/index.js'
 import {
   composeCategorySystemPrompt,
   loadSelectedCategorySkills,
@@ -9,6 +9,8 @@ import {
 import { buildDeterministicMindMap, StreamingMindMapRecordParser } from './mindMapRecords.js'
 import type { MindMapProgressSnapshot } from './streamMindMap.js'
 import { ContextLengthError, isContextLengthError } from './context.js'
+import { createJevClient, type JevClient } from '../jev/client.js'
+import { checkAnalysisCoverage, selectSkillForTask } from '../jev/decisions.js'
 
 export interface MindMapNodeData {
   text: string
@@ -318,6 +320,53 @@ function removeInternalMarker(raw: string, marker: string): string {
   return raw.split(marker).join('')
 }
 
+/** Headings / numbered sections of the source document, used for coverage checks. */
+function extractDocumentHeadings(content: string): string[] {
+  const headings: string[] = []
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const markdown = line.match(/^#{1,4}\s+(.+?)\s*#*$/)
+    const numbered = line.match(/^(\d+(?:\.\d+)*)[.、\s]+(\S.{1,80})$/)
+    const candidate = markdown?.[1] || (numbered ? `${numbered[1]} ${numbered[2]}` : '')
+    if (!candidate) continue
+    const text = candidate.replace(/[：:]\s*$/, '').trim()
+    if (text.length < 2 || text.length > 100) continue
+    if (!headings.includes(text)) headings.push(text)
+    if (headings.length >= 24) break
+  }
+  return headings
+}
+
+async function selectAnalysisSkills(
+  jevClient: JevClient,
+  content: string,
+  emit: (event: RequirementAnalyzeStreamEvent) => void,
+): Promise<CategorySkillMeta[]> {
+  const all = await loadSelectedCategorySkills('function-point')
+  if (!jevClient.active || all.length < 2) return all
+
+  const selection = await selectSkillForTask(jevClient, {
+    task: `从需求文档中提取可测试功能点（黑盒测试分析）：\n${content.slice(0, 1500)}`,
+    skills: all.map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      content: skill.content,
+    })),
+  })
+  if (!selection) return all
+
+  const picked = all.find((skill) => skill.name === selection.name)
+  if (!picked) return all
+  emit({
+    type: 'status',
+    data: {
+      message: `Jev 选择 skill「${picked.name}」（置信度 ${selection.confidence.toFixed(2)}）`,
+    },
+  })
+  return [picked]
+}
+
 async function createCompatibleCompletion(
   client: OpenAI,
   request: StreamingRequest,
@@ -433,6 +482,7 @@ function stripInternalAnalysisMarkers(raw: string): string {
 
 export async function analyzeRequirementDocument(input: {
   llm: LlmSettings
+  jev?: JevSettings
   content: string
   fileName?: string
 }): Promise<RequirementAnalysisResult> {
@@ -449,6 +499,7 @@ export async function analyzeRequirementDocument(input: {
 
 export async function streamAnalyzeRequirementDocument(input: {
   llm: LlmSettings
+  jev?: JevSettings
   content: string
   fileName?: string
   signal?: AbortSignal
@@ -461,7 +512,11 @@ export async function streamAnalyzeRequirementDocument(input: {
   if (signal?.aborted) throw createAbortError()
   const run = createGenerationRun(signal)
 
-  const skills = await loadSelectedCategorySkills('function-point')
+  const jevClient = createJevClient(input.jev, {
+    signal,
+    onNote: (message) => emit({ type: 'status', data: { message } }),
+  })
+  const skills = await selectAnalysisSkills(jevClient, content, emit)
   emit({ type: 'skills', data: { skills } })
 
   const skillSystemPrompt = composeCategorySystemPrompt(skills)
@@ -481,6 +536,8 @@ export async function streamAnalyzeRequirementDocument(input: {
     let markerPending = ''
     let continuationCount = 0
     let stalledPasses = 0
+    let coverageChecked = false
+    let coverageRetryUsed = false
 
     const emitAnalysisContent = (contentDelta: string) => {
       reasoningSummary += contentDelta
@@ -520,8 +577,57 @@ export async function streamAnalyzeRequirementDocument(input: {
       if (
         terminalMarkerIndex(reasoningSummary, ANALYSIS_COMPLETE_MARKER) >= 0 &&
         !missingCoverage.length
-      )
+      ) {
+        // Jev section-level coverage check (one batched request, best-effort).
+        if (!coverageChecked && jevClient.active) {
+          coverageChecked = true
+          const headings = extractDocumentHeadings(content)
+          if (headings.length) {
+            emit({
+              type: 'status',
+              data: { message: `Jev 正在校验 ${headings.length} 个章节的分析覆盖度…` },
+            })
+            const coverage = await checkAnalysisCoverage(jevClient, headings, reasoningSummary)
+            if (coverage?.missing.length) {
+              if (!coverageRetryUsed) {
+                coverageRetryUsed = true
+                coverageChecked = false
+                continuationCount += 1
+                emit({
+                  type: 'status',
+                  data: {
+                    message: `Jev 发现 ${coverage.missing.length} 个章节未覆盖，正在请求补全：${coverage.missing
+                      .slice(0, 5)
+                      .join('、')}`,
+                  },
+                })
+                reasoningSummary = removeInternalMarker(reasoningSummary, ANALYSIS_COMPLETE_MARKER)
+                markerPending = removeInternalMarker(markerPending, ANALYSIS_COMPLETE_MARKER)
+                continuationMessages = [
+                  ...initialMessages,
+                  { role: 'assistant', content: reasoningSummary },
+                  {
+                    role: 'user',
+                    content: `以下需求章节在分析中未被覆盖：${coverage.missing.join('、')}。请只补充这些章节的功能、业务规则、状态与边界分析，不要重复已输出内容；确认覆盖全文后以单独一行输出 ${ANALYSIS_COMPLETE_MARKER}。`,
+                  },
+                ]
+                continue
+              }
+              emit({
+                type: 'status',
+                data: {
+                  message: `Jev 覆盖度校验：仍有 ${coverage.missing.length} 个章节未覆盖（${coverage.missing
+                    .slice(0, 5)
+                    .join('、')}），继续生成思维导图`,
+                },
+              })
+            } else {
+              emit({ type: 'status', data: { message: 'Jev 覆盖度校验通过，所有章节均已分析' } })
+            }
+          }
+        }
         break
+      }
       if (finishReason === 'content_filter') {
         throw new Error('模型因内容安全策略中断需求分析，未生成完整结论')
       }

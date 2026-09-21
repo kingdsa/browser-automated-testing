@@ -40,6 +40,11 @@ export const config = {
     apiKey: process.env.LLM_API_KEY || '',
     model: process.env.LLM_MODEL || 'gpt-4o-mini',
   },
+  defaultJev: {
+    baseUrl: process.env.TYPESAFE_BASE_URL || 'https://api.typesafe.ai/v1',
+    apiKey: process.env.TYPESAFE_API_KEY || '',
+    model: process.env.TYPESAFE_MODEL || 'jev-latest',
+  },
   requirementsGenerationMaxDurationMs: Number(
     process.env.REQUIREMENTS_AI_MAX_RUN_MS || 60 * 60 * 1000,
   ),

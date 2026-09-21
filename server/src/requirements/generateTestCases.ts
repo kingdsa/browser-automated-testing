@@ -1,6 +1,6 @@
 import OpenAI from 'openai'
 import { z } from 'zod'
-import type { LlmSettings, SessionConfig } from '../types/index.js'
+import type { JevSettings, LlmSettings, SessionConfig } from '../types/index.js'
 import {
   explorePageForTestCases,
   shouldExploreWithBrowser,
@@ -11,12 +11,20 @@ import {
   extractVerifiedPaths,
   normalizeCases as normalizeCasesGeneric,
   type FeaturePoint as FeaturePointLite,
+  type NormalizeCasesOptions,
 } from './stepBuilder.js'
 import {
   composeCategorySystemPrompt,
   loadSelectedCategorySkills,
   type CategorySkillMeta,
 } from '../skills/loader.js'
+import { createJevClient, type JevClient } from '../jev/client.js'
+import {
+  matchCasesToFeatures,
+  selectSkillForTask,
+  verifyExplorationPaths,
+  verifyTestSteps,
+} from '../jev/decisions.js'
 
 export interface MindMapNodeData {
   text: string
@@ -144,6 +152,7 @@ function normalizeCases(
   cases: Array<z.infer<typeof testCaseSchema>>,
   features: FeaturePoint[],
   exploration?: PageExplorationResult | null,
+  options?: NormalizeCasesOptions,
 ): TestCase[] {
   const lite = normalizeCasesGeneric(
     cases.map((item) => ({ ...item, priority: item.priority })),
@@ -155,6 +164,7 @@ function normalizeCases(
           visitedUrls: exploration.visitedUrls,
         }
       : null,
+    options,
   )
   return lite.map((item, index) => {
     const matched = features.find((feature) => feature.text === item.feature)
@@ -361,12 +371,7 @@ function assertLlmReady(llm: LlmSettings) {
   if (!llm.model?.trim()) throw new Error('请先配置模型名称')
 }
 
-function parseTestCaseResult(
-  raw: string,
-  title: string,
-  features: FeaturePoint[],
-  exploration?: PageExplorationResult | null,
-): GenerateTestCasesResult {
+function parseTestCasePayload(raw: string): z.infer<typeof responseSchema> {
   if (!raw.trim()) throw new Error('模型未返回测试用例')
 
   let parsed: unknown
@@ -380,13 +385,22 @@ function parseTestCaseResult(
 
   const validated = responseSchema.safeParse(parsed)
   if (!validated.success) throw new Error('模型返回结构不完整')
+  return validated.data
+}
 
-  const cases = normalizeCases(validated.data.cases, features, exploration)
+function buildTestCaseResult(
+  payload: z.infer<typeof responseSchema>,
+  title: string,
+  features: FeaturePoint[],
+  exploration?: PageExplorationResult | null,
+  options?: NormalizeCasesOptions,
+): GenerateTestCasesResult {
+  const cases = normalizeCases(payload.cases, features, exploration, options)
   const grounded = Boolean(exploration)
   return {
-    title: validated.data.title.trim() || `${title}测试用例`,
+    title: payload.title.trim() || `${title}测试用例`,
     summary:
-      validated.data.summary.trim() ||
+      payload.summary.trim() ||
       (grounded
         ? `基于真实页面探索覆盖 ${features.length} 个功能点，共 ${cases.length} 条用例`
         : `覆盖 ${features.length} 个功能点，共 ${cases.length} 条用例`),
@@ -402,12 +416,121 @@ function parseTestCaseResult(
   }
 }
 
+/**
+ * Jev pre-pass over the raw model output:
+ * - align unmatched cases with real feature points,
+ * - flag steps that are not concrete/executable,
+ * - flag exploration paths that are too vague to build steps from.
+ * All failures degrade silently to the previous heuristic behavior.
+ */
+async function enhanceCasesWithJev(
+  jevClient: JevClient,
+  payloadCases: Array<z.infer<typeof testCaseSchema>>,
+  features: FeaturePoint[],
+  exploration: PageExplorationResult | null,
+  emit: (event: TestCaseStreamEvent) => void,
+): Promise<NormalizeCasesOptions> {
+  const options: NormalizeCasesOptions = {}
+  if (!jevClient.active) return options
+
+  try {
+    const featureTexts = features.map((feature) => feature.text)
+    const known = new Set(featureTexts)
+    const unmatched = payloadCases
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => !known.has(item.feature.trim()))
+
+    if (unmatched.length) {
+      emit({
+        type: 'status',
+        data: { message: `Jev 正在把 ${unmatched.length} 条用例对齐到功能点…` },
+      })
+      const matches = await matchCasesToFeatures(
+        jevClient,
+        unmatched.map(({ item }) => ({ title: item.title, feature: item.feature, steps: item.steps })),
+        featureTexts,
+      )
+      if (matches?.length) {
+        for (const match of matches) {
+          const target = unmatched[match.caseIndex]
+          const feature = features.find((item) => item.text === match.featureText)
+          if (!target || !feature) continue
+          target.item.feature = feature.text
+          target.item.featurePath = feature.path
+        }
+        emit({
+          type: 'status',
+          data: { message: `Jev 已对齐 ${matches.length} 条用例的功能点归属` },
+        })
+      }
+    }
+
+    const allSteps = payloadCases.flatMap((item) => item.steps)
+    if (allSteps.length) {
+      emit({
+        type: 'status',
+        data: { message: `Jev 正在批量校验 ${allSteps.length} 个步骤是否具体可执行…` },
+      })
+      const verification = await verifyTestSteps(jevClient, allSteps)
+      if (verification) {
+        options.vagueSteps = verification.vagueSteps
+        if (verification.vagueSteps.length) {
+          emit({
+            type: 'status',
+            data: {
+              message: `Jev 标记 ${verification.vagueSteps.length} 个空泛步骤，将用页面事实重建`,
+            },
+          })
+        }
+      }
+    }
+
+    if (exploration) {
+      const paths = extractVerifiedPaths(exploration.notes)
+      if (paths.length) {
+        const pathCheck = await verifyExplorationPaths(jevClient, paths)
+        if (pathCheck?.excludedIndexes.length) {
+          options.excludedPathIndexes = pathCheck.excludedIndexes
+          emit({
+            type: 'status',
+            data: {
+              message: `Jev 判定 ${pathCheck.excludedIndexes.length} 条探索路径不够具体，已排除出步骤构建`,
+            },
+          })
+        }
+      }
+    }
+  } catch {
+    // enhancement is best-effort only
+  }
+  return options
+}
+
 async function composeTestCaseSystemPrompt(
   features: FeaturePoint[],
   exploration: PageExplorationResult | null,
+  jevClient: JevClient,
+  task: string,
 ): Promise<{ systemPrompt: string; skills: CategorySkillMeta[] }> {
   const testCaseSkills = await loadSelectedCategorySkills('test-case')
-  const skills: CategorySkillMeta[] = [...testCaseSkills]
+  let chosenSkills: CategorySkillMeta[] = [...testCaseSkills]
+
+  if (jevClient.active && testCaseSkills.length > 1) {
+    const selection = await selectSkillForTask(jevClient, {
+      task,
+      skills: testCaseSkills.map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        content: skill.content,
+      })),
+    })
+    if (selection) {
+      const picked = testCaseSkills.find((skill) => skill.name === selection.name)
+      if (picked) chosenSkills = [picked]
+    }
+  }
+
+  const skills: CategorySkillMeta[] = [...chosenSkills]
 
   if (exploration) {
     const controlChromeSkills = await loadSelectedCategorySkills('control-chrome')
@@ -426,6 +549,7 @@ async function composeTestCaseSystemPrompt(
 
 export async function generateTestCasesFromFeatures(input: {
   llm: LlmSettings
+  jev?: JevSettings
   title?: string
   summary?: string
   root?: MindMapNode | null
@@ -440,6 +564,7 @@ export async function generateTestCasesFromFeatures(input: {
 
 export async function streamGenerateTestCasesFromFeatures(input: {
   llm: LlmSettings
+  jev?: JevSettings
   title?: string
   summary?: string
   root?: MindMapNode | null
@@ -463,6 +588,10 @@ export async function streamGenerateTestCasesFromFeatures(input: {
   const title = input.title?.trim() || '需求功能点'
   const summary = input.summary?.trim() || ''
   const client = createClient(llm)
+  const jevClient = createJevClient(input.jev, {
+    signal,
+    onNote: (message) => emit({ type: 'status', data: { message } }),
+  })
 
   let exploration: PageExplorationResult | null = null
 
@@ -478,6 +607,7 @@ export async function streamGenerateTestCasesFromFeatures(input: {
     try {
       exploration = await explorePageForTestCases({
         llm,
+        jev: input.jev,
         title,
         summary,
         features,
@@ -516,7 +646,13 @@ export async function streamGenerateTestCasesFromFeatures(input: {
     emit({ type: 'status', data: { message: `未指定目标页面，正在根据 ${features.length} 个功能点生成测试用例...` } })
   }
 
-  const { systemPrompt, skills } = await composeTestCaseSystemPrompt(features, exploration)
+  const skillTask = [title, summary, ...features.slice(0, 30).map((item) => item.path)].join('；')
+  const { systemPrompt, skills } = await composeTestCaseSystemPrompt(
+    features,
+    exploration,
+    jevClient,
+    skillTask,
+  )
   emit({ type: 'skills', data: { skills } })
 
   try {
@@ -545,7 +681,15 @@ export async function streamGenerateTestCasesFromFeatures(input: {
     if (signal?.aborted) throw createAbortError()
 
     emit({ type: 'status', data: { message: '模型输出完成，正在解析测试用例...' } })
-    const result = parseTestCaseResult(raw, title, features, exploration)
+    const payload = parseTestCasePayload(raw)
+    const enhanceOptions = await enhanceCasesWithJev(
+      jevClient,
+      payload.cases,
+      features,
+      exploration,
+      emit,
+    )
+    const result = buildTestCaseResult(payload, title, features, exploration, enhanceOptions)
     emit({ type: 'result', data: result })
     emit({ type: 'done', data: {} })
     return result

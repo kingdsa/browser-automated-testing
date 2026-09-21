@@ -7,6 +7,7 @@ const settingsStore = useSettingsStore()
 const health = ref<'unknown' | 'ok' | 'down'>('unknown')
 const skills = ref<Array<{ name: string; description: string }>>([])
 const hasServerKey = ref(false)
+const hasServerJevKey = ref(false)
 const tabsLoading = ref(false)
 const tabsHint = ref('')
 const tabs = ref<Array<{ endpoint: string; browser?: string; index: number; url: string; title: string }>>([])
@@ -38,8 +39,10 @@ async function refreshMeta() {
   try {
     const defaults = await fetchDefaults()
     hasServerKey.value = defaults.llm.hasApiKey
+    hasServerJevKey.value = Boolean(defaults.jev?.hasApiKey)
   } catch {
     hasServerKey.value = false
+    hasServerJevKey.value = false
   }
 
   await refreshTabs()
@@ -112,6 +115,30 @@ onMounted(refreshMeta)
           placeholder="gpt-4o-mini / claude-... / deepseek-..."
         />
       </label>
+    </section>
+
+    <section class="section">
+      <h3>Jev 决策加速（可选）</h3>
+      <label class="inline">
+        <input v-model="settingsStore.settings.jev.enabled" type="checkbox" />
+        <span>启用 Jev（TypeSafe System One）</span>
+      </label>
+      <label>
+        <span>Jev API Key {{ hasServerJevKey ? '(服务端 .env 已配置，可留空)' : '' }}</span>
+        <input
+          v-model="settingsStore.settings.jev.apiKey"
+          type="password"
+          placeholder="ts-... 手动输入"
+          autocomplete="off"
+        />
+      </label>
+      <label>
+        <span>Jev 模型</span>
+        <input v-model="settingsStore.settings.jev.model" type="text" placeholder="jev-latest" />
+      </label>
+      <p class="hint">
+        只读观察走本地快路径、日志结果自动分诊、用例步骤与探索路径校验、最终报告审计；未填 Key 时自动回退现有流程。
+      </p>
     </section>
 
     <section class="section">

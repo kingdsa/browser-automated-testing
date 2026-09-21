@@ -5,6 +5,8 @@ import { config } from '../config.js'
 import { analyzeRequirementDocument, streamAnalyzeRequirementDocument, streamGenerateMindMap } from '../requirements/analyze.js'
 import { extractRequirementText } from '../requirements/extractText.js'
 import { generateTestCasesFromFeatures, streamGenerateTestCasesFromFeatures } from '../requirements/generateTestCases.js'
+import { createJevClient } from '../jev/client.js'
+import { screenPromptInjection } from '../jev/decisions.js'
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -16,6 +18,15 @@ const upload = multer({
 
 const llmSchema = z
   .object({
+    baseUrl: z.string().optional(),
+    apiKey: z.string().optional(),
+    model: z.string().optional(),
+  })
+  .optional()
+
+const jevSchema = z
+  .object({
+    enabled: z.boolean().optional(),
     baseUrl: z.string().optional(),
     apiKey: z.string().optional(),
     model: z.string().optional(),
@@ -64,6 +75,34 @@ function resolveLlm(bodyLlm?: {
   }
 }
 
+function resolveJev(bodyJev?: {
+  enabled?: boolean
+  baseUrl?: string
+  apiKey?: string
+  model?: string
+}) {
+  return {
+    enabled: bodyJev?.enabled,
+    baseUrl: bodyJev?.baseUrl || config.defaultJev.baseUrl,
+    apiKey: bodyJev?.apiKey || config.defaultJev.apiKey,
+    model: bodyJev?.model || config.defaultJev.model,
+  }
+}
+
+/** Returns an error message when the content looks like prompt injection. */
+async function screenInjection(
+  content: string,
+  jev: z.infer<typeof jevSchema>,
+): Promise<string | null> {
+  const client = createJevClient(jev)
+  if (!client.active) return null
+  const result = await screenPromptInjection(client, content)
+  if (result?.flagged) {
+    return `Jev 护栏：检测到疑似提示注入内容（noul=${result.noul.toFixed(2)}），已拒绝分析。请移除试图操纵 AI 系统的指令后重试。`
+  }
+  return null
+}
+
 function parseMaybeJsonObject(value: unknown): Record<string, unknown> | undefined {
   if (!value) return undefined
   if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>
@@ -95,7 +134,6 @@ function beginSse(res: import('express').Response) {
     if (res.writableEnded) return
     res.write(`event: ${event.type}\n`)
     res.write(`data: ${JSON.stringify(event.data)}\n\n`)
-    res.flush?.()
   }
 
   return { abortController, writeEvent }
@@ -113,6 +151,8 @@ requirementsRouter.post('/requirements/analyze', upload.single('file'), async (r
     }
 
     const llm = resolveLlm(llmParsed.data)
+    const jevParsed = jevSchema.safeParse(parseMaybeJsonObject(req.body?.jev))
+    const jev = resolveJev(jevParsed.success ? jevParsed.data : undefined)
     const pastedContent = typeof req.body?.content === 'string' ? req.body.content : ''
     const fileNameFromBody = typeof req.body?.fileName === 'string' ? req.body.fileName : ''
     let content = pastedContent.trim()
@@ -139,8 +179,15 @@ requirementsRouter.post('/requirements/analyze', upload.single('file'), async (r
       return
     }
 
+    const guardError = await screenInjection(content, jev)
+    if (guardError) {
+      res.status(400).json({ ok: false, error: guardError })
+      return
+    }
+
     const result = await analyzeRequirementDocument({
       llm,
+      jev,
       content,
       fileName,
     })
@@ -192,6 +239,10 @@ requirementsRouter.post('/requirements/test-cases', async (req, res) => {
     }
 
     const llm = resolveLlm(llmParsed.data)
+    const jevParsed = jevSchema.safeParse(
+      parseMaybeJsonObject(req.body?.jev) || (typeof req.body?.jev === 'object' ? req.body.jev : undefined),
+    )
+    const jev = resolveJev(jevParsed.success ? jevParsed.data : undefined)
     const sessionParsed = sessionSchema.safeParse(req.body?.session)
     if (!sessionParsed.success) {
       res.status(400).json({ error: 'session 参数无效', details: sessionParsed.error.flatten() })
@@ -209,6 +260,7 @@ requirementsRouter.post('/requirements/test-cases', async (req, res) => {
 
     const result = await generateTestCasesFromFeatures({
       llm,
+      jev,
       title,
       summary,
       root,
@@ -240,6 +292,8 @@ requirementsRouter.post('/requirements/analyze/stream', upload.single('file'), a
     }
 
     const llm = resolveLlm(llmParsed.data)
+    const jevParsed = jevSchema.safeParse(parseMaybeJsonObject(req.body?.jev))
+    const jev = resolveJev(jevParsed.success ? jevParsed.data : undefined)
     const pastedContent = typeof req.body?.content === 'string' ? req.body.content : ''
     const fileNameFromBody = typeof req.body?.fileName === 'string' ? req.body.fileName : ''
     let content = pastedContent.trim()
@@ -268,6 +322,14 @@ requirementsRouter.post('/requirements/analyze/stream', upload.single('file'), a
       return
     }
 
+    const guardError = await screenInjection(content, jev)
+    if (guardError) {
+      writeEvent({ type: 'error', data: { message: guardError } })
+      writeEvent({ type: 'done', data: {} })
+      res.end()
+      return
+    }
+
     writeEvent({
       type: 'status',
       data: { message: `准备分析「${fileName}」（${content.length} 字）...` },
@@ -275,6 +337,7 @@ requirementsRouter.post('/requirements/analyze/stream', upload.single('file'), a
 
     const result = await streamAnalyzeRequirementDocument({
       llm,
+      jev,
       content,
       fileName,
       signal: abortController.signal,
@@ -376,6 +439,10 @@ requirementsRouter.post('/requirements/test-cases/stream', async (req, res) => {
     }
 
     const llm = resolveLlm(llmParsed.data)
+    const jevParsed = jevSchema.safeParse(
+      parseMaybeJsonObject(req.body?.jev) || (typeof req.body?.jev === 'object' ? req.body.jev : undefined),
+    )
+    const jev = resolveJev(jevParsed.success ? jevParsed.data : undefined)
     const sessionParsed = sessionSchema.safeParse(req.body?.session)
     if (!sessionParsed.success) {
       writeEvent({ type: 'error', data: { message: 'session 参数无效' } })
@@ -397,6 +464,7 @@ requirementsRouter.post('/requirements/test-cases/stream', async (req, res) => {
 
     await streamGenerateTestCasesFromFeatures({
       llm,
+      jev,
       title,
       summary,
       root,

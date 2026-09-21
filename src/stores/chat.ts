@@ -169,6 +169,19 @@ export const useChatStore = defineStore('chat', () => {
               return
             }
 
+            if (type === 'report_audit') {
+              const issues = Array.isArray(payload.issues)
+                ? (payload.issues as unknown[]).map((item) => String(item)).filter(Boolean)
+                : []
+              const completeness = String(payload.completeness || '')
+              if (issues.length) {
+                statusText.value = `Jev 报告审计：${issues.join('；')}`
+              } else if (completeness) {
+                statusText.value = `Jev 报告审计通过（完整度：${completeness}）`
+              }
+              return
+            }
+
             if (type === 'tool_start') {
               // Text before tools is intermediate analysis, not the final report.
               closeOpenSegment(assistant, 'analysis')

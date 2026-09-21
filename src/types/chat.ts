@@ -51,6 +51,14 @@ export interface LlmSettings {
   model: string
 }
 
+/** TypeSafe Jev (System One) typed-decision fast path. */
+export interface JevSettings {
+  enabled: boolean
+  baseUrl: string
+  apiKey: string
+  model: string
+}
+
 export type BrowserMode = 'auto' | 'launch' | 'attach'
 
 export interface SessionSettings {
@@ -66,5 +74,6 @@ export interface SessionSettings {
 
 export interface AppSettings {
   llm: LlmSettings
+  jev: JevSettings
   session: SessionSettings
 }

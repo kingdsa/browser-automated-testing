@@ -17,6 +17,7 @@ export async function streamChat(input: {
     body: JSON.stringify({
       messages: input.messages,
       llm: input.settings.llm,
+      jev: input.settings.jev,
       session: {
         targetUrl: input.settings.session.targetUrl || undefined,
         headless: input.settings.session.headless,
@@ -96,6 +97,11 @@ export async function fetchDefaults() {
   if (!res.ok) throw new Error('获取默认配置失败')
   return res.json() as Promise<{
     llm: {
+      baseUrl: string
+      model: string
+      hasApiKey: boolean
+    }
+    jev: {
       baseUrl: string
       model: string
       hasApiKey: boolean
